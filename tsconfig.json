@@ -8,14 +8,13 @@
     "module": "esnext",
     "moduleResolution": "node",
     "resolveJsonModule": true,
+    "experimentalDecorators": true,
     "declaration": true,
     "noFallthroughCasesInSwitch": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "skipLibCheck": true,
-    "lib": ["dom", "esnext"],
-    "outDir": "lib"
+    "lib": ["dom", "esnext"]
   },
   "exclude": ["node_modules", "dist", "lib"],
-  "include": ["src"]
 }

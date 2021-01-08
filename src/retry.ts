@@ -1,8 +1,8 @@
-import { asPromise, CancelablePromise, canceled, CancellationToken, CancellationTokenSource, createCancelablePromise, Event, isPromiseCanceledError, ITask, timeout } from '@newstudios/common'
+import { asPromise, CancelablePromise, canceled, CancellationToken, createCancelablePromise, isPromiseCanceledError, timeout } from '@newstudios/common'
 import Debug from 'debug'
+import { abortSignalToCancellationToken, normalizeCancelablePromiseWithToken } from './utils'
 
 const debug = Debug('xpc-advanced:retry')
-
 export namespace Retry {
 
   /**
@@ -87,14 +87,19 @@ export namespace Retry {
     protected runInternal<T extends Runnable>(fn: T, token: CancellationToken): Promise<PromiseReturnType<T>> {
       // get retry callback
       const callback = typeof this.s === 'object' ? Strategy.from(this.s) : this.s
-      const task = fn.bind(null, token)
+      const task = () => normalizeCancelablePromiseWithToken(fn(token), token)
 
       function run(count = 0): Promise<PromiseReturnType<T>> {
         if (token.isCancellationRequested) {
           return Promise.reject(canceled())
         }
         const next = () => run(count + 1)
-        const retry = (err: unknown) => asPromise(() => callback(err, count, token)).then(next)
+        const retry = (err: unknown) => asPromise(() => {
+          if (isPromiseCanceledError(err)) {
+            throw err
+          }
+          return callback(err, count, token)
+        }).then(next)
         return asPromise(task).catch(retry)
       }
 
@@ -112,7 +117,7 @@ export namespace Retry {
     }
 
     public signal(signal: AbortSignal): FactoryWithToken {
-      return this.token(signalToToken(signal))
+      return this.token(abortSignalToCancellationToken(signal))
     }
 
     public clone(): FactoryWithoutToken {
@@ -145,7 +150,7 @@ export namespace Retry {
     }
 
     public signal(signal: AbortSignal): this {
-      return this.token(signalToToken(signal))
+      return this.token(abortSignalToCancellationToken(signal))
     }
 
     public clone(): FactoryWithToken {
@@ -167,7 +172,7 @@ export namespace Retry {
     }
     let token: CancellationToken
     if ('addEventListener' in tokenOrSignal) {
-      token = signalToToken(tokenOrSignal)
+      token = abortSignalToCancellationToken(tokenOrSignal)
     } else {
       token = tokenOrSignal
     }
@@ -180,13 +185,5 @@ export namespace Retry {
 
   export function runWithToken<T extends Runnable>(fn: T, token: CancellationToken | AbortSignal, strategy: Strategy | Callback = Strategy.Default) {
     return factory(token).strategy(strategy).run(fn)
-  }
-
-  export function signalToToken(signal: AbortSignal) {
-    const tokenSource = new CancellationTokenSource()
-    const onAbort = Event.fromDOMEventEmitter<globalThis.Event>(signal, 'abort')
-    const d = onAbort(() => tokenSource.cancel())
-    tokenSource.token.onCancellationRequested(d.dispose, d)
-    return tokenSource.token
   }
 }

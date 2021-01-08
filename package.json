@@ -8,7 +8,7 @@
   "scripts": {
     "test": "jest",
     "build:js:cjs": "babel --config-file ./babel.cjs.json src --no-comments --extensions \".ts,.tsx\" --out-dir lib",
-    "build:types:cjs": "tsc --emitDeclarationOnly",
+    "build:types:cjs": "tsc --emitDeclarationOnly --p tsconfig.cjs.json",
     "build:js:esm": "babel --config-file ./babel.esm.json src --no-comments --extensions \".ts,.tsx\" --out-dir dist",
     "build:types:esm": "tsc --emitDeclarationOnly --p tsconfig.esm.json",
     "build:cjs": "concurrently \"npm:build:*:cjs\"",
