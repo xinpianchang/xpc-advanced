@@ -7,7 +7,7 @@
       },
       "bugfixes": true,
       "loose": true,
-      "modules": false
+      "modules": "cjs"
     }]
   ],
   "plugins": [
