@@ -1,5 +1,5 @@
-import { Disposable, Event } from '@newstudios/common'
-import { Kvo } from '../dist'
+import { Disposable, disposableTimeout, Event } from '@newstudios/common'
+import { Kvo } from '..'
 
 const createClass = () => {
   return class A extends Disposable {
@@ -40,5 +40,20 @@ describe('Kvo module cases', () => {
     const promise = Event.toPromise(instance.onXChanged)
     setTimeout(() => instance.x = 4, 100)
     return expect(promise).resolves.toEqual({ prev: undefined, current: 4 })
+  })
+
+  test('kvo observe private property', () => {
+    expect.assertions(1)
+    class B extends Disposable {
+      private x?: number
+      public onXChanged: Event<number | undefined> = Kvo.observe(this, 'x', ({ current }) => current)
+      constructor() {
+        super()
+        this._register(disposableTimeout(() => this.x = 5, 100))
+      }
+    }
+    const instance = new B()
+    const promise = Event.toPromise(instance.onXChanged)
+    return expect(promise).resolves.toEqual(5)
   })
 })

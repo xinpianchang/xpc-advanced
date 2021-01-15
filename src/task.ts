@@ -1,4 +1,5 @@
 import { CancelablePromise, canceled, CancellationToken, Disposable, DisposableStore, Emitter, Event, IDisposable, isThenable, toDisposable } from '@newstudios/common'
+import { Kvo } from './kvo'
 import { normalizeCancelablePromiseWithToken, shortcutEvent } from './utils'
 
 const shadowCompare = <T extends Record<string, any>>(prev: T, current: T) => {
@@ -176,11 +177,11 @@ export namespace Task {
   }
 
   class InternalTask<Result = any, State = any> extends Disposable implements Task<Result, State> {
-    private readonly _onComplete = this._register(new Emitter<void>())
     private readonly _runnable: Runnable<Result, State>
   
-    private readonly _onStatusChange = this._register(new Emitter<ChangeEvent<Status>>())
-    public readonly onStatusChange = this._onStatusChange.event
+    private _status: Status = Status.init
+    public readonly onStatusChange: Event<ChangeEvent<Status>> = Kvo.observe(this, '_status')
+
     public readonly onRestart = Event.signal(Event.filter(this.onStatusChange, ({prev, current}) => {
       return isInStatus(prev, Status.abort, Status.error) && isInStatus(current, Status.pending, Status.running)
     }))
@@ -202,10 +203,15 @@ export namespace Task {
 
     private readonly _onStateChange = this._register(new Emitter<ChangeEvent<State>>())
     public readonly onStateChange = this._onStateChange.event
+
+    private readonly _onComplete = this._register(new Emitter<void>())
+    public readonly onComplete: Event<void> = (listener, thisArgs?, disposables?) => {
+      const event = this._disposed ? Event.None : this.completed ? shortcutEvent : this._onComplete.event
+      return event(listener, thisArgs, disposables)
+    }
   
     private _disposed = false
     private _state: State
-    private _status: Status = Status.init
     private _dispatcher: Dispatcher
     private _stack: string
 
@@ -227,11 +233,9 @@ export namespace Task {
       this._initState = initialState
       this._state = Object.assign({}, initialState)
       this._dispatcher = dispatcher
-      this.onStatusChange(({current}) => {
-        if (isInStatus(current, Status.complete)) {
-          this._onComplete.fire()
-        }
-      })
+
+      // register status change handler
+      this.onStatusChange(this.handleStatusChange, this)
 
       this._runnable = runnable
     }
@@ -282,40 +286,53 @@ export namespace Task {
       }
     }
 
+    private handleStatusChange({ current }: ChangeEvent<Status>) {
+      if (current !== Status.error) {
+        this._error = undefined
+      }
+
+      if (current === Status.complete) {
+        this._onComplete.fire()
+      }
+    }
+
+    /** @deprecated */
     public setStatus(current: Status) {
       this.assertNotDisposed()
       if (this._status !== current) {
         const prev = this._status
         if (prev === 'complete') {
-          console.warn(`cannot set status other than complete if task[${this.name}] has been completed`)
+          console.warn(`cannot set status any more if task[${this.name}] has completed`)
           return
         }
         this._status = current
-        if (current !== Status.error) {
-          this._error = undefined
-        }
-        this._onStatusChange.fire({
-          prev,
-          current,
-        })
       }
     }
 
     public setResult(result: Result) {
       this.assertNotDisposed()
-      this.assertNotCompleted()
+      if (this.completed) {
+        console.warn(`cannot set result twice since task[${this.name}] has completed already`)
+        return
+      }
       this._result = result
+      this._status = Status.complete
     }
 
     public setError(error: any) {
       this.assertNotDisposed()
       this.assertNotCompleted()
+      if (!this.running) {
+        console.warn(`cannot set error since task[${this.name}] is not running`)
+        return
+      }
       if (error instanceof Error) {
         let stack = error.stack || ''
         stack += '\n' + this.stack
         error.stack = stack
       }
       this._error = error
+      this._status = Status.error
     }
   
     public get pending() {
@@ -342,15 +359,6 @@ export namespace Task {
        return this._result
     }
   
-    public get onComplete() {
-      if (this._disposed) {
-        return Event.None
-      } else if (this.completed) {
-        return shortcutEvent
-      }
-      return this._onComplete.event
-    }
-  
     public start(resetState = false) {
       this.assertNotDisposed()
       this.assertNotCompleted()
@@ -368,6 +376,7 @@ export namespace Task {
       this.assertNotDisposed()
       this.assertNotCompleted()
       this.dispatcher.stop(this)
+      this._status = Status.abort
     }
   
     public get stack() {
@@ -404,6 +413,8 @@ export namespace Task {
 
     public run(token: CancellationToken): Promise<Result> {
       if (this.status !== Status.running) {
+        this._status = Status.running
+      } else {
         return Promise.reject(new Error('task is not in running state'))
       }
       if (token.isCancellationRequested) {

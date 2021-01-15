@@ -1,5 +1,5 @@
 import { raceCancellation } from '@newstudios/common'
-import { Task } from '../dist'
+import { Task } from '..'
 
 describe('Task module cases', () => {
   jest.setTimeout(20000)
