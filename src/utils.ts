@@ -1,4 +1,12 @@
-import { CancelablePromise, CancellationToken, DisposableStore, Emitter, Event, IDisposable, isThenable } from '@newstudios/common'
+import {
+  CancelablePromise,
+  CancellationToken,
+  DisposableStore,
+  Emitter,
+  Event,
+  IDisposable,
+  isThenable,
+} from '@newstudios/common'
 
 export function isCancelablePromise<R>(promise: unknown): promise is CancelablePromise<R> {
   if (isThenable(promise) && typeof (promise as CancelablePromise<R>).cancel === 'function') {
@@ -12,11 +20,14 @@ export const shortcutEvent: Event<void> = Object.freeze(function (callback, cont
   return {
     dispose() {
       clearTimeout(handle)
-    }
+    },
   }
 })
 
-export function normalizeCancelablePromiseWithToken<T>(result: T | Promise<T> | CancelablePromise<T>, token: CancellationToken) {
+export function normalizeCancelablePromiseWithToken<T>(
+  result: T | Promise<T> | CancelablePromise<T>,
+  token: CancellationToken
+) {
   if (isCancelablePromise(result)) {
     const d = token.onCancellationRequested(result.cancel, result)
     return result.finally(() => d.dispose())
@@ -39,19 +50,17 @@ export function abortSignalToCancellationToken(signal: AbortSignal) {
         d.dispose()
         d = undefined
       }
-    }
+    },
   })
 
   const token: CancellationToken = Object.freeze({
-    onCancellationRequested(
-      listener: () => any,
-      thisArgs?: any,
-      disposables?: IDisposable[] | DisposableStore,
-    ) {
+    onCancellationRequested(listener: () => any, thisArgs?: any, disposables?: IDisposable[] | DisposableStore) {
       const event = signal.aborted ? shortcutEvent : emitter.event
       return event(listener, thisArgs, disposables)
     },
-    get isCancellationRequested() { return signal.aborted }
+    get isCancellationRequested() {
+      return signal.aborted
+    },
   })
 
   return token

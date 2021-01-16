@@ -10,12 +10,30 @@ export namespace Kvo {
     current: T
   }
 
-  export function observe<N extends string, T extends { [k in N]: unknown } & Disposable>(target: T, name: N): Event<ChangeEvent<T[N]>>
-  export function observe<N extends string, T extends { [k in N]: unknown } & Disposable, R>(target: T, name: N, map: (evt: ChangeEvent<T[N]>) => R): Event<R>
-  export function observe<N extends string, T extends { [k in N]?: unknown } & Disposable>(target: T, name: N): Event<ChangeEvent<T[N] | undefined>>
-  export function observe<N extends string, T extends { [k in N]?: unknown } & Disposable, R>(target: T, name: N, map: (evt: ChangeEvent<T[N] | undefined>) => R): Event<R>
+  export function observe<N extends string, T extends { [k in N]: unknown } & Disposable>(
+    target: T,
+    name: N
+  ): Event<ChangeEvent<T[N]>>
+  export function observe<N extends string, T extends { [k in N]: unknown } & Disposable, R>(
+    target: T,
+    name: N,
+    map: (evt: ChangeEvent<T[N]>) => R
+  ): Event<R>
+  export function observe<N extends string, T extends { [k in N]?: unknown } & Disposable>(
+    target: T,
+    name: N
+  ): Event<ChangeEvent<T[N] | undefined>>
+  export function observe<N extends string, T extends { [k in N]?: unknown } & Disposable, R>(
+    target: T,
+    name: N,
+    map: (evt: ChangeEvent<T[N] | undefined>) => R
+  ): Event<R>
   export function observe<R>(target: Disposable, name: string, map?: (evt: ChangeEvent<any>) => R): Event<R>
-  export function observe<N extends string, T extends { [k in N]?: unknown } & Disposable, R>(target: T, name: N, map?: (evt: ChangeEvent<T[N] | undefined>) => R) {
+  export function observe<N extends string, T extends { [k in N]?: unknown } & Disposable, R>(
+    target: T,
+    name: N,
+    map?: (evt: ChangeEvent<T[N] | undefined>) => R
+  ) {
     const t = target as any
     if (t._store._isDisposed) {
       console.warn(
@@ -37,7 +55,9 @@ export namespace Kvo {
           value: t._register(emitter),
         },
         [name]: {
-          get() { return val },
+          get() {
+            return val
+          },
           set(current: T[N]) {
             if (val !== current) {
               const prev = val

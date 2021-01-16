@@ -1,10 +1,17 @@
-import { asPromise, CancelablePromise, canceled, CancellationToken, createCancelablePromise, isPromiseCanceledError, timeout } from '@newstudios/common'
+import {
+  asPromise,
+  CancelablePromise,
+  canceled,
+  CancellationToken,
+  createCancelablePromise,
+  isPromiseCanceledError,
+  timeout,
+} from '@newstudios/common'
 import Debug from 'debug'
 import { abortSignalToCancellationToken, normalizeCancelablePromiseWithToken } from './utils'
 
 const debug = Debug('xpc-advanced:retry')
 export namespace Retry {
-
   /**
    * Retry callback delegation
    * @err the error which is caught by this library
@@ -35,10 +42,13 @@ export namespace Retry {
   }
 
   export type Runnable = (token: CancellationToken) => any
-  type PromiseReturnType<T extends Function> = T extends (...args: any[]) => infer R ? R extends Promise<infer RR> ? RR : R : never
+  type PromiseReturnType<T extends Function> = T extends (...args: any[]) => infer R
+    ? R extends Promise<infer RR>
+      ? RR
+      : R
+    : never
 
   export namespace Strategy {
-
     export const Default = {
       count: 3,
       delay: 1000,
@@ -56,20 +66,24 @@ export namespace Retry {
      */
     export function create(
       maxRetryCount = 3,
-      retryDelay: number | Promise<number> | ((count: number, token: CancellationToken) => (number | Promise<number>)) = 1000,
+      retryDelay:
+        | number
+        | Promise<number>
+        | ((count: number, token: CancellationToken) => number | Promise<number>) = 1000
     ): Callback {
-      return (err, count, token) => asPromise(() => {
-        if (maxRetryCount >= 0 && count >= maxRetryCount || isPromiseCanceledError(err)) {
-          throw err
-        }
+      return (err, count, token) =>
+        asPromise(() => {
+          if (maxRetryCount >= 0 && count >= maxRetryCount) {
+            throw err
+          }
 
-        debug('prepare to start a retrying [count=%d] for %s', count + 1, err)
+          debug('prepare to start a retrying [count=%d] for %s', count + 1, err)
 
-        const now = Date.now()
-        const delayTask = () => typeof retryDelay === 'function' ? retryDelay(count, token) : retryDelay
-        const timeoutTask = (delay: number) => timeout(delay - Date.now() + now, token)
-        return asPromise(delayTask).then(timeoutTask)
-      })
+          const now = Date.now()
+          const delayTask = () => (typeof retryDelay === 'function' ? retryDelay(count, token) : retryDelay)
+          const timeoutTask = (delay: number) => timeout(delay - Date.now() + now, token)
+          return asPromise(delayTask).then(timeoutTask)
+        })
     }
 
     export function from({ count, delay }: Strategy = Strategy.Default) {
@@ -94,12 +108,13 @@ export namespace Retry {
           return Promise.reject(canceled())
         }
         const next = () => run(count + 1)
-        const retry = (err: unknown) => asPromise(() => {
-          if (isPromiseCanceledError(err)) {
-            throw err
-          }
-          return callback(err, count, token)
-        }).then(next)
+        const retry = (err: unknown) =>
+          asPromise(() => {
+            if (isPromiseCanceledError(err)) {
+              throw err
+            }
+            return callback(err, count, token)
+          }).then(next)
         return asPromise(task).catch(retry)
       }
 
@@ -183,7 +198,11 @@ export namespace Retry {
     return factory().strategy(strategy).run(fn)
   }
 
-  export function runWithToken<T extends Runnable>(fn: T, token: CancellationToken | AbortSignal, strategy: Strategy | Callback = Strategy.Default) {
+  export function runWithToken<T extends Runnable>(
+    fn: T,
+    token: CancellationToken | AbortSignal,
+    strategy: Strategy | Callback = Strategy.Default
+  ) {
     return factory(token).strategy(strategy).run(fn)
   }
 }
