@@ -7,9 +7,9 @@
   "types": "dist/index.d.ts",
   "scripts": {
     "test": "jest",
-    "build:js:cjs": "babel --config-file ./babel.cjs.json src --no-comments --extensions \".ts,.tsx\" --out-dir lib",
+    "build:js:cjs": "babel --config-file ./babel.config.js src --no-comments --extensions \".ts,.tsx\" --out-dir lib",
     "build:types:cjs": "tsc --emitDeclarationOnly --p tsconfig.cjs.json",
-    "build:js:esm": "babel --config-file ./babel.esm.json src --no-comments --extensions \".ts,.tsx\" --out-dir dist",
+    "build:js:esm": "cross-env ESM=true babel --config-file ./babel.config.js src --no-comments --extensions \".ts,.tsx\" --out-dir dist",
     "build:types:esm": "tsc --emitDeclarationOnly --p tsconfig.esm.json",
     "build:cjs": "concurrently \"npm:build:*:cjs\"",
     "build:esm": "concurrently \"npm:build:*:esm\"",
@@ -24,10 +24,26 @@
   },
   "author": "TangYe",
   "license": "MIT",
+  "husky": {
+    "hooks": {
+      "pre-commit": "lint-staged"
+    }
+  },
+  "lint-staged": {
+    "*.{js,ts}": [
+      "eslint --fix",
+      "git add"
+    ],
+    "*.{json,md,yml}": [
+      "prettier --write",
+      "git add"
+    ]
+  },
   "dependencies": {
-    "@newstudios/common": "^0.2.1",
-    "debug": "^4.3.1",
-    "eslint-plugin-prettier": "^3.3.1"
+    "debug": "^4.3.1"
+  },
+  "peerDependencies": {
+    "@newstudios/common": "^0.2.1"
   },
   "devDependencies": {
     "@babel/cli": "^7.12.10",
@@ -39,14 +55,18 @@
     "@babel/plugin-transform-typescript": "^7.12.1",
     "@babel/preset-env": "^7.12.11",
     "@babel/preset-typescript": "^7.12.7",
+    "@newstudios/common": "^0.2.1",
     "@types/debug": "^4.1.5",
     "@types/jest": "^26.0.19",
     "@types/node": "^14.14.20",
     "@typescript-eslint/eslint-plugin": "^4.13.0",
     "@typescript-eslint/parser": "^4.13.0",
     "concurrently": "^5.2.0",
+    "cross-env": "^7.0.3",
     "eslint": "^7.17.0",
     "eslint-config-prettier": "^7.1.0",
+    "eslint-plugin-prettier": "^3.3.1",
+    "husky": "^4.3.8",
     "jest": "^26.6.3",
     "lint-staged": "^10.5.3",
     "prettier": "^2.2.1",
