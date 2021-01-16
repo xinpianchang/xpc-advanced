@@ -35,9 +35,7 @@
       "git add"
     ]
   },
-  "dependencies": {
-    "debug": "^4.3.1"
-  },
+  "dependencies": {},
   "peerDependencies": {
     "@newstudios/common": "^0.2.1"
   },

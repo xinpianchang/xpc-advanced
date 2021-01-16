@@ -16,7 +16,7 @@ describe('Kvo module cases', () => {
     const instance = new Class()
     const event = Kvo.observe(instance, 'x')
     const promise = Event.toPromise(event)
-    setTimeout(() => instance.x = 4, 100)
+    setTimeout(() => (instance.x = 4), 100)
     return expect(promise).resolves.toEqual({ prev: 0, current: 4 })
   })
 
@@ -26,7 +26,7 @@ describe('Kvo module cases', () => {
     const instance = new Class()
     const event = Kvo.observe(instance, 'x', ({ current }) => current)
     const promise = Event.toPromise(event)
-    setTimeout(() => instance.x = 4, 100)
+    setTimeout(() => (instance.x = 4), 100)
     return expect(promise).resolves.toBe(4)
   })
 
@@ -38,7 +38,7 @@ describe('Kvo module cases', () => {
     }
     const instance = new B()
     const promise = Event.toPromise(instance.onXChanged)
-    setTimeout(() => instance.x = 4, 100)
+    setTimeout(() => (instance.x = 4), 100)
     return expect(promise).resolves.toEqual({ prev: undefined, current: 4 })
   })
 
@@ -46,10 +46,10 @@ describe('Kvo module cases', () => {
     expect.assertions(1)
     class B extends Disposable {
       private x?: number
-      public onXChanged: Event<number | undefined> = Kvo.observe(this, 'x', ({ current }) => current)
+      public onXChanged = Kvo.observe<number | undefined>(this, 'x', Kvo.mapCurrent)
       constructor() {
         super()
-        this._register(disposableTimeout(() => this.x = 5, 100))
+        this._register(disposableTimeout(() => (this.x = 5), 100))
       }
     }
     const instance = new B()

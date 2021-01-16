@@ -10,6 +10,14 @@ export namespace Kvo {
     current: T
   }
 
+  export function mapCurrent<T>({ current }: ChangeEvent<T>) {
+    return current
+  }
+
+  export function mapPrevious<T>({ prev }: ChangeEvent<T>) {
+    return prev
+  }
+
   export function observe<N extends string, T extends { [k in N]: unknown } & Disposable>(
     target: T,
     name: N

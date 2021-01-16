@@ -2,18 +2,21 @@ import {
   CancelablePromise,
   canceled,
   CancellationToken,
+  CancellationTokenSource,
+  createCancelablePromise,
   Disposable,
   DisposableStore,
   Emitter,
   Event,
   IDisposable,
+  isPromiseCanceledError,
   isThenable,
   toDisposable,
 } from '@newstudios/common'
 import { Kvo } from './kvo'
 import { normalizeCancelablePromiseWithToken, shortcutEvent } from './utils'
 
-const shadowCompare = <T extends Record<string, any>>(prev: T, current: T) => {
+const shallowCompare = <T extends Record<string, any>>(prev: T, current: T) => {
   const keys = Object.keys(prev)
   const keys2 = Object.keys(current)
   if (keys.length !== keys2.length) {
@@ -35,9 +38,9 @@ export interface Task<Result, State> extends IDisposable {
   readonly onAbort: Event<void>
   readonly onComplete: Event<void>
   readonly onError: Event<unknown>
+  readonly onResult: Event<Result>
   readonly onStatusChange: Event<Task.ChangeEvent<Task.Status>>
   readonly onStateChange: Event<Task.ChangeEvent<State>>
-  readonly name: string
   readonly state: Readonly<State>
   readonly status: Task.Status
   readonly result?: Result
@@ -45,6 +48,7 @@ export interface Task<Result, State> extends IDisposable {
   readonly pending: boolean
   readonly running: boolean
   readonly aborted: boolean
+  readonly started: boolean
   readonly completed: boolean
   readonly destroyed: boolean
   start(resetState?: boolean): void
@@ -53,7 +57,9 @@ export interface Task<Result, State> extends IDisposable {
    * @deprecated use dispose instead
    */
   destroy(): void
+  asPromise(): CancelablePromise<Result>
   dispatcher: Task.Dispatcher
+  name: string
 }
 
 /**
@@ -104,75 +110,123 @@ export namespace Task {
 
   export type Status = keyof typeof Status
 
-  export interface Dispatcher {
-    start(task: Task<unknown, any>): void
-    stop(task: Task<unknown, any>): void
+  export interface Dispatcher extends IDisposable {
+    start<T>(task: Dispatcher.DispatcherTask<T>): void
+    stop<T>(task: Dispatcher.DispatcherTask<T>): void
   }
 
   export namespace Dispatcher {
-    export const Default = (null as any) as Dispatcher
-
-    export interface Options<T extends Task<any, any>> {
-      push(task: T): void
-      shift(): T | undefined
-      highWaterMark(): boolean
-      delete(task: T): T | undefined
-      clear(): void
+    export interface DispatcherTask<T> {
+      run(token: CancellationToken): Promise<T>
+      setResult(result: T): void
+      setError(error: any): void
     }
 
-    //   class InternalDispatcher extends Disposable implements Dispatcher {
+    class InternalDefaultDispatcher extends Disposable implements Dispatcher {
+      private readonly runningSet = new Map<DispatcherTask<any>, CancellationTokenSource>()
+      private readonly queue = [] as DispatcherTask<any>[]
+      private readonly tokenSource = new CancellationTokenSource()
+      private _disposed = false
 
-    //     private readonly queued = new LinkedList<InternalTask>()
-    //     private _disposed = false
+      constructor(private readonly maxParallel = 1) {
+        super()
+      }
 
-    //     // constructor(options: Options) {
-    //     //   super()
-    //     // }
+      private get runningCount() {
+        return this.runningSet.size
+      }
 
-    //     private take(): InternalTask | undefined {
-    //       return undefined
-    //     }
+      start<T>(task: DispatcherTask<T>) {
+        if (this._disposed) {
+          return
+        }
+        if (this.queue.indexOf(task) >= 0) {
+          return
+        }
 
-    //     private highWaterMark() {
-    //       return false
-    //     }
+        this.queue.push(task)
+        this.check()
+      }
 
-    //     public start(task: InternalTask) {
-    //       if (task.dispatcher !== this) {
-    //         throw new Error('task does not belong to this dispatcher')
-    //       }
-    //       switch (task.status) {
-    //         case Status.pending:
-    //         case Status.running:
-    //           return
-    //         case Status.complete:
-    //           console.warn('a completed task cannot be restarted')
-    //           return
-    //         case Status.error:
-    //         case Status.abort:
-    //         case Status.init:
-    //           if (this.highWaterMark()) {
-    //             // this.enqueue(task)
-    //           } else {
-    //             // this.run(task)
-    //           }
-    //           return
-    //       }
-    //     }
+      stop<T>(task: DispatcherTask<T>) {
+        const source = this.runningSet.get(task)
+        if (source) {
+          this.runningSet.delete(task)
+          source.dispose(true)
+          task.setError(canceled)
+          this.check()
+        } else {
+          const idx = this.queue.indexOf(task)
+          if (idx >= 0) {
+            this.queue.splice(idx, 1)
+            task.setError(canceled)
+          }
+        }
+      }
 
-    //     public stop(task: InternalTask) {
-    //       throw new Error('Method not implemented.')
-    //     }
+      private run<T>(task: DispatcherTask<T>) {
+        if (this.runningCount >= this.maxParallel) {
+          // reach the max parallel runnint count
+          return
+        }
 
-    //     public dispose() {
-    //       if (!this._disposed) {
-    //         this.queued.toArray().forEach(task => task.dispose())
-    //         this.queued.clear()
-    //         super.dispose()
-    //         this._disposed = true
-    //       }
-    //     }
-    //   }
+        const runningSet = this.runningSet
+
+        const oldSource = runningSet.get(task)
+        const source = new CancellationTokenSource(this.tokenSource.token)
+        runningSet.set(task, source)
+
+        const finalize = () => {
+          if (runningSet.get(task) === source) {
+            runningSet.delete(task)
+            source.dispose()
+            this.check()
+          }
+        }
+
+        const setResult = (result: T) => {
+          if (runningSet.get(task) === source) {
+            task.setResult(result)
+          }
+        }
+
+        const setError = (err: unknown) => {
+          if (runningSet.get(task) === source) {
+            task.setError(err)
+          }
+        }
+
+        task.run(source.token).then(setResult, setError).finally(finalize)
+
+        if (oldSource) {
+          oldSource.dispose(true)
+          this.check()
+        }
+      }
+
+      private check() {
+        if (this._disposed) {
+          return
+        }
+        if (this.runningCount < this.maxParallel) {
+          const task = this.queue.shift()
+          if (task) {
+            this.run(task)
+          }
+        }
+      }
+
+      dispose() {
+        this._disposed = true
+        this.tokenSource.dispose(true)
+        super.dispose()
+      }
+    }
+
+    export const Default: Dispatcher = new InternalDefaultDispatcher(1)
+    export function create(maxParallel: number): Dispatcher {
+      return new InternalDefaultDispatcher(maxParallel)
+    }
   }
 
   export function isInStatus(src: Status, ...dest: Status[]) {
@@ -184,11 +238,13 @@ export namespace Task {
     return false
   }
 
-  class InternalTask<Result = any, State = any> extends Disposable implements Task<Result, State> {
+  class InternalTask<Result = any, State = any>
+    extends Disposable
+    implements Task<Result, State>, Dispatcher.DispatcherTask<Result> {
     private readonly _runnable: Runnable<Result, State>
 
     private _status: Status = Status.init
-    public readonly onStatusChange: Event<ChangeEvent<Status>> = Kvo.observe(this, '_status')
+    public readonly onStatusChange = Kvo.observe<ChangeEvent<Status>>(this, '_status')
 
     public readonly onRestart = Event.signal(
       Event.filter(this.onStatusChange, ({ prev, current }) => {
@@ -221,6 +277,12 @@ export namespace Task {
       }),
       () => this._error
     )
+    public readonly onResult = Event.map(
+      Event.filter(this.onStatusChange, ({ current }) => {
+        return isInStatus(current, Status.complete) && this._done
+      }),
+      () => this._result as Result
+    )
 
     private readonly _onStateChange = this._register(new Emitter<ChangeEvent<State>>())
     public readonly onStateChange = this._onStateChange.event
@@ -236,10 +298,11 @@ export namespace Task {
     private _dispatcher: Dispatcher
     private _stack: string
 
+    private _done = false
     private _result?: Result
     private _error?: any
 
-    public readonly name: string
+    public name: string
     private readonly _initState: State
 
     constructor(runnable: Runnable<Result, State>, initialState: State, dispatcher: Dispatcher = Dispatcher.Default) {
@@ -262,18 +325,13 @@ export namespace Task {
       if (this._dispatcher === dispatcher) {
         return
       }
-      switch (this._status) {
-        case 'running':
-        case 'pending': {
-          if (this._status === 'running') {
-            this.abort()
-          }
-          this._dispatcher = dispatcher
-          this.start()
-          return
-        }
+      if (this.running || this.pending) {
+        this.abort()
+        this._dispatcher = dispatcher
+        this.start()
+      } else {
+        this._dispatcher = dispatcher
       }
-      this._dispatcher = dispatcher
     }
 
     public get dispatcher() {
@@ -294,7 +352,7 @@ export namespace Task {
         this._state = current
 
         // FIXME?
-        if (!shadowCompare(prev, current)) {
+        if (!shallowCompare(prev, current)) {
           this._onStateChange.fire({
             prev,
             current,
@@ -327,18 +385,34 @@ export namespace Task {
     }
 
     public setResult(result: Result) {
-      this.assertNotDisposed()
+      if (this.destroyed) {
+        console.warn(`cannot set result since task[${this.name}] has been disposed already`)
+        return
+      }
       if (this.completed) {
         console.warn(`cannot set result twice since task[${this.name}] has completed already`)
         return
       }
       this._result = result
+      this._done = true
       this._status = Status.complete
     }
 
-    public setError(error: any) {
-      this.assertNotDisposed()
-      this.assertNotCompleted()
+    public setError(error: unknown) {
+      if (this.destroyed) {
+        console.warn(`cannot set error since task[${this.name}] has been disposed already`)
+        return
+      }
+      if (this.completed) {
+        console.warn(`cannot set result twice since task[${this.name}] has completed already`)
+        return
+      }
+      if (isPromiseCanceledError(error)) {
+        if (this.running) {
+          this._status = Status.abort
+        }
+        return
+      }
       if (!this.running) {
         console.warn(`cannot set error since task[${this.name}] is not running`)
         return
@@ -350,6 +424,10 @@ export namespace Task {
       }
       this._error = error
       this._status = Status.error
+    }
+
+    public get started() {
+      return isInStatus(this._status, Status.pending, Status.running)
     }
 
     public get pending() {
@@ -383,15 +461,28 @@ export namespace Task {
         console.warn(`task[${this.name}] is already started`)
         return
       }
-      this.dispatcher.start(this)
+
+      // FIXME set before or after starting
       if (resetState) {
         this.setState(this._initState)
+      }
+
+      this.dispatcher.start(this)
+
+      if (!this.running) {
+        this._status = Status.pending
       }
     }
 
     public abort() {
-      this.assertNotDisposed()
-      this.assertNotCompleted()
+      if (this._disposed) {
+        console.warn('task is disposed already, so no need to abort again')
+        return
+      }
+      if (this.completed) {
+        console.warn('task is completed, so no need to abort again')
+        return
+      }
       this.dispatcher.stop(this)
       this._status = Status.abort
     }
@@ -428,15 +519,50 @@ export namespace Task {
       }
     }
 
+    public asPromise() {
+      return createCancelablePromise(token => {
+        return new Promise<Result>((resolve, reject) => {
+          if (this._disposed) {
+            reject(new Error(`task[${this.name}] is already disposed`))
+            return
+          }
+          if (this._done) {
+            resolve(this._result as Result)
+            return
+          }
+          if (this._error) {
+            reject(this._error)
+            return
+          }
+          if (this.status === Status.abort) {
+            reject(canceled())
+            return
+          }
+
+          token.onCancellationRequested(this.abort, this)
+
+          Event.toPromise(this.onResult).then(resolve)
+          Event.toPromise(this.onError).then(reject)
+          Event.toPromise(this.onAbort).then(() => reject(canceled()))
+        })
+      })
+    }
+
     public run(token: CancellationToken): Promise<Result> {
-      if (this.status !== Status.running) {
-        this._status = Status.running
-      } else {
-        return Promise.reject(new Error('task is not in running state'))
+      if (this.destroyed) {
+        return Promise.reject(new Error('cannot run task for it is disposed'))
+      }
+      if (this.completed) {
+        return Promise.reject(new Error('cannot run task for it is completed already'))
+      }
+      if (this.running) {
+        return Promise.reject(new Error("cannot run task for it's been running now"))
       }
       if (token.isCancellationRequested) {
         return Promise.reject(canceled())
       }
+
+      this._status = Status.running
 
       // task is about to run
       const store = new DisposableStore()
@@ -446,7 +572,7 @@ export namespace Task {
           running = false
         })
       )
-      const onFinal = () => store.dispose()
+      const finalize = store.dispose.bind(store)
 
       return new Promise<Result>((resolve, reject) => {
         // abort immediatelly because we need to
@@ -455,7 +581,7 @@ export namespace Task {
         const task = this
         const setState = (state: Partial<State> | ((prev: State) => State)) => {
           if (!running) {
-            console.warn(`cannot set task state because task[${task.name}] is out of state`)
+            // console.warn(`cannot set task state because task[${task.name}] is out of running state`)
             return
           }
           let newState: State
@@ -486,7 +612,7 @@ export namespace Task {
         } else {
           resolve(result)
         }
-      }).finally(onFinal)
+      }).finally(finalize)
     }
   }
 }

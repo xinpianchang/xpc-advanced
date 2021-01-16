@@ -7,10 +7,7 @@ import {
   isPromiseCanceledError,
   timeout,
 } from '@newstudios/common'
-import Debug from 'debug'
 import { abortSignalToCancellationToken, normalizeCancelablePromiseWithToken } from './utils'
-
-const debug = Debug('xpc-advanced:retry')
 export namespace Retry {
   /**
    * Retry callback delegation
@@ -77,7 +74,7 @@ export namespace Retry {
             throw err
           }
 
-          debug('prepare to start a retrying [count=%d] for %s', count + 1, err)
+          // console.debug('prepare to start a retrying [count=%d] for %s', count + 1, err)
 
           const now = Date.now()
           const delayTask = () => (typeof retryDelay === 'function' ? retryDelay(count, token) : retryDelay)
