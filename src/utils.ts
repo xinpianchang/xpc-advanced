@@ -65,3 +65,23 @@ export function abortSignalToCancellationToken(signal: AbortSignal) {
 
   return token
 }
+
+/**
+ * A promise `Canceled Error` is created by canceled() with Canceled error name
+ * and a `cancelled Error` is created by just setting the cancelled property to be true
+ */
+export function isCanceledError(err: unknown): err is Error & ({ name: 'Canceled' } | { cancelled: true }) {
+  if (err instanceof Error) {
+    if (err.name === 'Canceled' || (err as any).cancelled === true) {
+      return true
+    }
+  }
+  return false
+}
+
+/**
+ * An AbortError is thrown by aborting a fetching process with name `AbortError`
+ */
+export function isAbortError(err: unknown): err is Error & { name: 'AbortError' } {
+  return err instanceof Error && err.name === 'AbortError'
+}

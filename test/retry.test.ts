@@ -12,7 +12,7 @@ function createTask<T>(processTime: number, errCount: number, target: T) {
   }
 }
 
-describe.skip('Retry module cases', () => {
+describe('Retry module cases', () => {
   jest.setTimeout(20000)
 
   test('run async normal', async () => {

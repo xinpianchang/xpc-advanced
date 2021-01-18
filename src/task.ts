@@ -9,12 +9,11 @@ import {
   Emitter,
   Event,
   IDisposable,
-  isPromiseCanceledError,
   isThenable,
   toDisposable,
 } from '@newstudios/common'
 import { Kvo } from './kvo'
-import { normalizeCancelablePromiseWithToken, shortcutEvent } from './utils'
+import { isAbortError, isCanceledError, normalizeCancelablePromiseWithToken, shortcutEvent } from './utils'
 
 const shallowCompare = <T extends Record<string, any>>(prev: T, current: T) => {
   const keys = Object.keys(prev)
@@ -72,7 +71,17 @@ export interface Task<Result, State> extends IDisposable {
  *
  */
 export namespace Task {
-  export function create<Result>(runnable: Runnable<Result, {}>): Task<Result, {}>
+  /**
+   * Task creator
+   * @param runnable task runnable factory
+   * @param initialState task init state, can be undefined or null, default to be `{}`
+   * @param dispatcher a task dispatcher, default to be `Task.Dispatcher.Default` with no limit
+   */
+  export function create<Result>(
+    runnable: Runnable<Result, {}>,
+    initialState?: null,
+    dispatcher?: Dispatcher
+  ): Task<Result, {}>
   export function create<Result, State extends Record<string, any>>(
     runnable: Runnable<Result, State>,
     initialState: State,
@@ -80,10 +89,10 @@ export namespace Task {
   ): Task<Result, State>
   export function create<Result, State extends Record<string, any>>(
     runnable: Runnable<Result, State>,
-    initialState: State = {} as State,
+    initialState?: State | null,
     dispatcher?: Dispatcher
   ) {
-    return new InternalTask(runnable, initialState, dispatcher)
+    return new InternalTask(runnable, (initialState || {}) as State, dispatcher)
   }
 
   export interface ChangeEvent<S> {
@@ -92,9 +101,25 @@ export namespace Task {
   }
 
   export interface Handler<S extends Record<string, any>> {
+    /**
+     * Cancellation token for abort control
+     */
     readonly token: CancellationToken
+    /**
+     * Readonly latest task state
+     */
     readonly state: Readonly<S>
-    readonly setState: (state: Partial<S> | ((prev: S) => S)) => void
+    /**
+     * Readonly restart count, first time it is 0
+     */
+    readonly restart: number
+    /**
+     * A state setter for the current task,
+     * works like react class component's `setState`
+     * @returns true if setState works, sometimes it is out of running state
+     * so that it returns false instead
+     */
+    readonly setState: (state: Partial<S> | ((prev: S) => S)) => boolean
   }
 
   export type Runnable<R, S> = (handler: Handler<S>) => R | Promise<R> | CancelablePromise<R>
@@ -111,20 +136,46 @@ export namespace Task {
   export type Status = keyof typeof Status
 
   export interface Dispatcher extends IDisposable {
-    start<T>(task: Dispatcher.DispatcherTask<T>): void
-    stop<T>(task: Dispatcher.DispatcherTask<T>): void
+    /**
+     * This will enqueue a task into the dispatcher, after that
+     * current dispatcher take over the task management.
+     * Implementer should notice that task can be start mutiple times.
+     * @param task the target task
+     */
+    start<T>(task: Dispatcher.ITask<T>): void
+    /**
+     * This will dequeue the task from the current dispatcher.
+     * Implementor should completely remove the task from dispatcher.
+     * @param task the target task
+     */
+    stop<T>(task: Dispatcher.ITask<T>): void
   }
 
   export namespace Dispatcher {
-    export interface DispatcherTask<T> {
+    export interface ITask<T> {
+      /**
+       * Call this to make task running.
+       * Should provide a cancellation token for the task.
+       * Moreover, the process will invoke `setResult` / `setError` internally when needed
+       * @param token the cancellation token
+       */
       run(token: CancellationToken): Promise<T>
+      /**
+       * Set the final successful result of the task.
+       * @param result the final result
+       */
       setResult(result: T): void
+      /**
+       * Set the error state of the task.
+       * Typically set `Canceled` error when you need to abort the task
+       * @param error the error you need to notify task with
+       */
       setError(error: any): void
     }
 
     class InternalDefaultDispatcher extends Disposable implements Dispatcher {
-      private readonly runningSet = new Map<DispatcherTask<any>, CancellationTokenSource>()
-      private readonly queue = [] as DispatcherTask<any>[]
+      private readonly runningSet = new Map<ITask<any>, CancellationTokenSource>()
+      private readonly queue = [] as ITask<any>[]
       private readonly tokenSource = new CancellationTokenSource()
       private _disposed = false
 
@@ -136,8 +187,9 @@ export namespace Task {
         return this.runningSet.size
       }
 
-      start<T>(task: DispatcherTask<T>) {
+      start<T>(task: ITask<T>) {
         if (this._disposed) {
+          task.setError(new Error('task dispatcher is already disposed'))
           return
         }
         if (this.queue.indexOf(task) >= 0) {
@@ -148,31 +200,42 @@ export namespace Task {
         this.check()
       }
 
-      stop<T>(task: DispatcherTask<T>) {
+      stop<T>(task: ITask<T>) {
         const source = this.runningSet.get(task)
         if (source) {
           this.runningSet.delete(task)
           source.dispose(true)
-          task.setError(canceled)
+          task.setError(canceled())
           this.check()
         } else {
           const idx = this.queue.indexOf(task)
           if (idx >= 0) {
             this.queue.splice(idx, 1)
-            task.setError(canceled)
+            task.setError(canceled())
           }
         }
       }
 
-      private run<T>(task: DispatcherTask<T>) {
+      private run<T>(task: ITask<T>) {
+        const runningSet = this.runningSet
+        const oldSource = runningSet.get(task)
+
+        if (this._disposed) {
+          task.setError(new Error('task dispatcher is already disposed'))
+          if (oldSource) {
+            runningSet.delete(task)
+            oldSource.dispose()
+          }
+          // recursively empty the task queue
+          this.check()
+          return
+        }
+
         if (this.runningCount >= this.maxParallel) {
           // reach the max parallel runnint count
           return
         }
 
-        const runningSet = this.runningSet
-
-        const oldSource = runningSet.get(task)
         const source = new CancellationTokenSource(this.tokenSource.token)
         runningSet.set(task, source)
 
@@ -205,9 +268,6 @@ export namespace Task {
       }
 
       private check() {
-        if (this._disposed) {
-          return
-        }
         if (this.runningCount < this.maxParallel) {
           const task = this.queue.shift()
           if (task) {
@@ -223,8 +283,28 @@ export namespace Task {
       }
     }
 
-    export const Default: Dispatcher = new InternalDefaultDispatcher(1)
+    /**
+     * A default task dispatcher without any parallel limit.
+     * When creating a task with no dispatcher specified,
+     * this default one will be used.
+     */
+    export const Default: Dispatcher = create(Infinity)
+
+    /**
+     * A task dispatcher which can run tasks one by one
+     * in starting order.
+     */
+    export const SingleThread: Dispatcher = create(1)
+
+    /**
+     * Create a task dispatcher with a max parallel running limit.
+     * Tasks more than max limit will be queued in starting order.
+     * @param maxParallel the limit to run task parallelly.
+     */
     export function create(maxParallel: number): Dispatcher {
+      if (maxParallel < 1) {
+        throw new Error('Parameter maxParallel should be lager than 0')
+      }
       return new InternalDefaultDispatcher(maxParallel)
     }
   }
@@ -240,7 +320,7 @@ export namespace Task {
 
   class InternalTask<Result = any, State = any>
     extends Disposable
-    implements Task<Result, State>, Dispatcher.DispatcherTask<Result> {
+    implements Task<Result, State>, Dispatcher.ITask<Result> {
     private readonly _runnable: Runnable<Result, State>
 
     private _status: Status = Status.init
@@ -301,9 +381,11 @@ export namespace Task {
     private _done = false
     private _result?: Result
     private _error?: any
+    private _restart = 0
 
     public name: string
     private readonly _initState: State
+    private internal = false
 
     constructor(runnable: Runnable<Result, State>, initialState: State, dispatcher: Dispatcher = Dispatcher.Default) {
       super()
@@ -315,23 +397,44 @@ export namespace Task {
       this._dispatcher = dispatcher
 
       // register status change handler
-      this.onStatusChange(this.handleStatusChange, this)
+      this._register(
+        Event.filter(this.onStatusChange, ({ current }) => current === Status.complete)(() => this._onComplete.fire())
+      )
+
+      // register restart counter handler
+      this.onRestart(() => this._restart++)
 
       this._runnable = runnable
     }
 
+    private warn(message: any, ...args: any[]) {
+      !this.internal && console.warn(`Task[${this.name}]:`, message, ...args)
+    }
+
+    private callWithoutWarn(block: () => void) {
+      let internal = this.internal
+      this.internal = true
+      block()
+      this.internal = internal
+    }
+
     public set dispatcher(dispatcher: Dispatcher) {
-      this.assertNotDisposed()
+      if (this.destroyed) {
+        this.warn('Set dispatcher failed since task is destroyed')
+        return
+      }
       if (this._dispatcher === dispatcher) {
         return
       }
-      if (this.running || this.pending) {
-        this.abort()
-        this._dispatcher = dispatcher
-        this.start()
-      } else {
-        this._dispatcher = dispatcher
-      }
+      this.callWithoutWarn(() => {
+        if (this.running || this.pending) {
+          this.abort()
+          this._dispatcher = dispatcher
+          this.start()
+        } else {
+          this._dispatcher = dispatcher
+        }
+      })
     }
 
     public get dispatcher() {
@@ -361,60 +464,35 @@ export namespace Task {
       }
     }
 
-    private handleStatusChange({ current }: ChangeEvent<Status>) {
-      if (current !== Status.error) {
-        this._error = undefined
-      }
-
-      if (current === Status.complete) {
-        this._onComplete.fire()
-      }
-    }
-
-    /** @deprecated */
-    public setStatus(current: Status) {
-      this.assertNotDisposed()
+    private setStatus(current: Status) {
       if (this._status !== current) {
         const prev = this._status
-        if (prev === 'complete') {
-          console.warn(`cannot set status any more if task[${this.name}] has completed`)
+        if (prev === Status.complete || this.destroyed) {
+          this.warn('cannot set status any more if task has completed or being destroyed')
           return
+        }
+        if (prev === Status.error) {
+          this._error = undefined
         }
         this._status = current
       }
     }
 
     public setResult(result: Result) {
-      if (this.destroyed) {
-        console.warn(`cannot set result since task[${this.name}] has been disposed already`)
-        return
-      }
-      if (this.completed) {
-        console.warn(`cannot set result twice since task[${this.name}] has completed already`)
+      if (this._done || this.completed) {
         return
       }
       this._result = result
       this._done = true
-      this._status = Status.complete
+      this.setStatus(Status.complete)
     }
 
     public setError(error: unknown) {
-      if (this.destroyed) {
-        console.warn(`cannot set error since task[${this.name}] has been disposed already`)
+      if (!this.running || this.completed) {
         return
       }
-      if (this.completed) {
-        console.warn(`cannot set result twice since task[${this.name}] has completed already`)
-        return
-      }
-      if (isPromiseCanceledError(error)) {
-        if (this.running) {
-          this._status = Status.abort
-        }
-        return
-      }
-      if (!this.running) {
-        console.warn(`cannot set error since task[${this.name}] is not running`)
+      if (isCanceledError(error) || isAbortError(error)) {
+        this.setStatus(Status.abort)
         return
       }
       if (error instanceof Error) {
@@ -423,11 +501,11 @@ export namespace Task {
         error.stack = stack
       }
       this._error = error
-      this._status = Status.error
+      this.setStatus(Status.error)
     }
 
     public get started() {
-      return isInStatus(this._status, Status.pending, Status.running)
+      return this._status === Status.pending || this._status === Status.running
     }
 
     public get pending() {
@@ -455,10 +533,18 @@ export namespace Task {
     }
 
     public start(resetState = false) {
-      this.assertNotDisposed()
-      this.assertNotCompleted()
-      if (this.running || this.pending) {
-        console.warn(`task[${this.name}] is already started`)
+      if (this.destroyed) {
+        this.warn('task is already destroyed, so it could not be started')
+        return
+      }
+
+      if (this.completed) {
+        this.warn('task is alrady completed, so it could not be restarted')
+        return
+      }
+
+      if (this.started) {
+        this.warn('task is started already')
         return
       }
 
@@ -470,37 +556,25 @@ export namespace Task {
       this.dispatcher.start(this)
 
       if (!this.running) {
-        this._status = Status.pending
+        this.setStatus(Status.pending)
       }
     }
 
     public abort() {
       if (this._disposed) {
-        console.warn('task is disposed already, so no need to abort again')
+        this.warn('task is disposed already')
         return
       }
       if (this.completed) {
-        console.warn('task is completed, so no need to abort again')
+        console.warn('task is completed or distroyed')
         return
       }
       this.dispatcher.stop(this)
-      this._status = Status.abort
+      this.setStatus(Status.abort)
     }
 
     public get stack() {
       return this._stack
-    }
-
-    private assertNotDisposed() {
-      if (this._disposed) {
-        throw new Error('task is disposed')
-      }
-    }
-
-    private assertNotCompleted() {
-      if (this.completed) {
-        throw new Error('task is already completed')
-      }
     }
 
     public destroy() {
@@ -513,9 +587,12 @@ export namespace Task {
 
     public dispose() {
       if (!this._disposed) {
-        this.abort()
-        super.dispose()
-        this._disposed = true
+        this.callWithoutWarn(() => {
+          this.abort()
+          this.setStatus(Status.complete)
+          super.dispose()
+          this._disposed = true
+        })
       }
     }
 
@@ -562,11 +639,13 @@ export namespace Task {
         return Promise.reject(canceled())
       }
 
-      this._status = Status.running
+      this.setStatus(Status.running)
 
       // task is about to run
       const store = new DisposableStore()
       let running = true
+      const restart = this._restart
+
       store.add(
         toDisposable(() => {
           running = false
@@ -581,8 +660,7 @@ export namespace Task {
         const task = this
         const setState = (state: Partial<State> | ((prev: State) => State)) => {
           if (!running) {
-            // console.warn(`cannot set task state because task[${task.name}] is out of running state`)
-            return
+            return false
           }
           let newState: State
           if (typeof state === 'function') {
@@ -591,6 +669,7 @@ export namespace Task {
             newState = Object.assign({}, task.state, state)
           }
           task.setState(newState)
+          return true
         }
         const handler: Handler<State> = {
           get state() {
@@ -598,6 +677,9 @@ export namespace Task {
           },
           get token() {
             return token
+          },
+          get restart() {
+            return restart
           },
           get setState() {
             return setState

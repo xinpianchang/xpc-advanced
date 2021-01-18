@@ -24,7 +24,7 @@ describe('Kvo module cases', () => {
     expect.assertions(1)
     const Class = createClass()
     const instance = new Class()
-    const event = Kvo.observe(instance, 'x', ({ current }) => current)
+    const event = Kvo.observe(instance, 'x', Kvo.mapCurrent)
     const promise = Event.toPromise(event)
     setTimeout(() => (instance.x = 4), 100)
     return expect(promise).resolves.toBe(4)

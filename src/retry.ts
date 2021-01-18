@@ -4,10 +4,15 @@ import {
   canceled,
   CancellationToken,
   createCancelablePromise,
-  isPromiseCanceledError,
   timeout,
 } from '@newstudios/common'
-import { abortSignalToCancellationToken, normalizeCancelablePromiseWithToken } from './utils'
+import {
+  abortSignalToCancellationToken,
+  isAbortError,
+  isCanceledError,
+  normalizeCancelablePromiseWithToken,
+} from './utils'
+
 export namespace Retry {
   /**
    * Retry callback delegation
@@ -107,7 +112,7 @@ export namespace Retry {
         const next = () => run(count + 1)
         const retry = (err: unknown) =>
           asPromise(() => {
-            if (isPromiseCanceledError(err)) {
+            if (isCanceledError(err) || isAbortError(err)) {
               throw err
             }
             return callback(err, count, token)
