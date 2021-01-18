@@ -46,7 +46,7 @@ describe('Kvo module cases', () => {
     expect.assertions(1)
     class B extends Disposable {
       private x?: number
-      public onXChanged = Kvo.observe<number | undefined>(this, 'x', Kvo.mapCurrent)
+      public onXChanged = Kvo.observe(this, 'x', Kvo.mapCurrent)
       constructor() {
         super()
         this._register(disposableTimeout(() => (this.x = 5), 100))

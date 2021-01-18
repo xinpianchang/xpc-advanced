@@ -152,20 +152,32 @@ describe('Task module cases', () => {
     dispatcher.dispose()
   })
 
-  // test('task restart on error', () => {
-  //   const task = Task.create(
-  //     async handler => {
-  //       if (handler.restart) {
-  //         await timeout(1000, handler.token)
-  //         handler.setState({ progress: 100 })
-  //         return 'ok'
-  //       }
-  //       handler.setState({ progress: 10 })
-  //       await timeout(1000, handler.token)
-  //       handler.setState({ progress: 50 })
-  //       throw new Error('error')
-  //     },
-  //     { progress: 0 }
-  //   )
-  // })
+  test('task restart on error', async () => {
+    expect.assertions(7)
+    const task = Task.create(
+      async handler => {
+        if (handler.restart) {
+          await timeout(1000, handler.token)
+          handler.setState({ progress: 100 })
+          return 'ok'
+        }
+        handler.setState({ progress: 10 })
+        await timeout(1000, handler.token)
+        handler.setState({ progress: 50 })
+        throw new Error('error')
+      },
+      { progress: 0 }
+    )
+    expect(task.state.progress).toBe(0)
+    task.start()
+    expect(task.state.progress).toBe(10)
+    await expect(task.asPromise()).rejects.toThrow('error')
+    expect(task.error.message).toBe('error')
+    await timeout(100)
+    task.start()
+    expect(task.running).toBe(true)
+    expect(task.state.progress).toBe(50)
+    await timeout(1100)
+    expect(task.result).toBe('ok')
+  })
 })

@@ -18,55 +18,45 @@ export namespace Kvo {
     return prev
   }
 
-  export function observe<N extends string, T extends { [k in N]: unknown } & Disposable>(
-    target: T,
-    name: N
-  ): Event<ChangeEvent<T[N]>>
-  export function observe<N extends string, T extends { [k in N]: unknown } & Disposable, R>(
+  export function observe<
+    R extends ChangeEvent<T[N]>,
+    T extends Record<string, any> & Disposable = Disposable,
+    N extends string = string
+  >(target: T, name: N): Event<R>
+  export function observe<R, T extends Record<string, any> & Disposable = Disposable, N extends string = string>(
     target: T,
     name: N,
     map: (evt: ChangeEvent<T[N]>) => R
   ): Event<R>
-  export function observe<N extends string, T extends { [k in N]?: unknown } & Disposable>(
-    target: T,
-    name: N
-  ): Event<ChangeEvent<T[N] | undefined>>
-  export function observe<N extends string, T extends { [k in N]?: unknown } & Disposable, R>(
-    target: T,
-    name: N,
-    map: (evt: ChangeEvent<T[N] | undefined>) => R
-  ): Event<R>
-  export function observe<R>(target: Disposable, name: string, map?: (evt: ChangeEvent<any>) => R): Event<R>
-  export function observe<N extends string, T extends { [k in N]?: unknown } & Disposable, R>(
-    target: T,
-    name: N,
-    map?: (evt: ChangeEvent<T[N] | undefined>) => R
-  ) {
-    const t = target as any
-    if (t._store._isDisposed) {
+  export function observe(target: any, name: string, map?: (evt: ChangeEvent<any>) => any) {
+    if (!target._store) {
+      console.warn(new Error('Trying to observe a target which is not a Disposable instance').stack)
+      return Event.None
+    }
+    if (target._store._isDisposed) {
       console.warn(
-        new Error('Trying to observe a target that has already been disposed of. The event could be leaked!').stack
+        new Error('Trying to observe a target that has already been disposed of. The event could be leaked').stack
       )
       return Event.None
     }
 
     const prop = capitalize(name)
     const emitterKey = `__on${prop}Changed`
-    let emitter: Emitter<ChangeEvent<T[N]>> | undefined = t[emitterKey]
+    let emitter: Emitter<ChangeEvent<any>> | undefined = target[emitterKey]
 
     if (!emitter) {
-      const e = new Emitter<ChangeEvent<T[N]>>()
+      const e = new Emitter<ChangeEvent<any>>()
       let val = target[name]
 
       Object.defineProperties(target, {
         [emitterKey]: {
-          value: t._register(emitter),
+          value: target._register(emitter),
         },
         [name]: {
           get() {
             return val
           },
-          set(current: T[N]) {
+          set(current: any) {
             if (val !== current) {
               const prev = val
               val = current

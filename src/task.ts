@@ -324,7 +324,7 @@ export namespace Task {
     private readonly _runnable: Runnable<Result, State>
 
     private _status: Status = Status.init
-    public readonly onStatusChange = Kvo.observe<ChangeEvent<Status>>(this, '_status')
+    public readonly onStatusChange = Kvo.observe(this, '_status')
 
     public readonly onRestart = Event.signal(
       Event.filter(this.onStatusChange, ({ prev, current }) => {
