@@ -90,7 +90,7 @@ Every task needs a task dispatcher, which conforms to the `Task.Dispatcher` inte
 Task library has already provided 2 dispatcher ready for usage.
 
 1. `Task.Dispatcher.Default`: A dispatcher who can dispatch task with no limit
-2. `Task.Dispatcher.SingleThread`: A dispatcher who can dispatch a task only when there is no task is running in it
+2. `Task.Dispatcher.SingleThread`: A dispatcher who can dispatch a task only when there is no task running in it
 
 And has also provided 1 dispatcher factory method: `Dispatcher.create(maxParallel: number)`
 

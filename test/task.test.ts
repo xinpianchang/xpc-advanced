@@ -118,4 +118,54 @@ describe('Task module cases', () => {
     await timeout(500)
     expect(task2.result).toBe('ok')
   })
+
+  test('task dispatcher parallel', async () => {
+    const dispatcher = Task.Dispatcher.create(2)
+    const pendingFn = jest.fn()
+    const completeFn = jest.fn()
+    const createTask = () => {
+      const task = Task.create(() => timeout(2000), null, dispatcher)
+      task.onPending(pendingFn)
+      task.onResult(completeFn)
+      return task
+    }
+    const task1 = createTask()
+    const task2 = createTask()
+    const task3 = createTask()
+
+    task1.start()
+    task2.start()
+    task3.start()
+
+    await timeout(1000)
+    expect(pendingFn).toBeCalledTimes(1)
+    expect(completeFn).toBeCalledTimes(0)
+
+    await timeout(1100)
+    expect(pendingFn).toBeCalledTimes(1)
+    expect(completeFn).toBeCalledTimes(2)
+
+    await timeout(2100)
+    expect(pendingFn).toBeCalledTimes(1)
+    expect(completeFn).toBeCalledTimes(3)
+
+    dispatcher.dispose()
+  })
+
+  // test('task restart on error', () => {
+  //   const task = Task.create(
+  //     async handler => {
+  //       if (handler.restart) {
+  //         await timeout(1000, handler.token)
+  //         handler.setState({ progress: 100 })
+  //         return 'ok'
+  //       }
+  //       handler.setState({ progress: 10 })
+  //       await timeout(1000, handler.token)
+  //       handler.setState({ progress: 50 })
+  //       throw new Error('error')
+  //     },
+  //     { progress: 0 }
+  //   )
+  // })
 })
