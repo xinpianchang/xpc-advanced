@@ -135,7 +135,7 @@ export namespace Task {
 
   export type Status = keyof typeof Status
 
-  export interface Dispatcher extends IDisposable {
+  export interface Dispatcher {
     /**
      * This will enqueue a task into the dispatcher, after that
      * current dispatcher take over the task management.
@@ -301,7 +301,7 @@ export namespace Task {
      * Tasks more than max limit will be queued in starting order.
      * @param maxParallel the limit to run task parallelly.
      */
-    export function create(maxParallel: number): Dispatcher {
+    export function create(maxParallel: number): Dispatcher & IDisposable {
       if (maxParallel < 1) {
         throw new Error('Parameter maxParallel should be lager than 0')
       }
