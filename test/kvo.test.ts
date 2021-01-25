@@ -1,4 +1,5 @@
-import { Disposable, disposableTimeout, Event } from '@newstudios/common'
+import { Disposable, disposableTimeout, Event, timeout } from '@newstudios/common'
+import nextTick from 'next-tick'
 import { Kvo } from '..'
 
 const createClass = () => {
@@ -55,5 +56,21 @@ describe('Kvo module cases', () => {
     const instance = new B()
     const promise = Event.toPromise(instance.onXChanged)
     return expect(promise).resolves.toEqual(5)
+  })
+
+  test('kvo observe async', async () => {
+    expect.assertions(2)
+    const Class = createClass()
+    const instance = new Class()
+    const event = Kvo.observe(instance, 'x', true)
+    const event2 = Kvo.observe(instance, 'x')
+    const fn = jest.fn()
+    event(fn)
+    event2(fn)
+    const promise = Event.toPromise(event)
+    instance.x = 5
+    expect(fn).toHaveBeenCalledTimes(1)
+    await promise
+    expect(fn).toHaveBeenCalledTimes(2)
   })
 })

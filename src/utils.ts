@@ -7,6 +7,7 @@ import {
   IDisposable,
   isThenable,
 } from '@newstudios/common'
+import nextTick from 'next-tick'
 
 export function isCancelablePromise<R>(promise: unknown): promise is CancelablePromise<R> {
   if (isThenable(promise) && typeof (promise as CancelablePromise<R>).cancel === 'function') {
@@ -16,10 +17,11 @@ export function isCancelablePromise<R>(promise: unknown): promise is CancelableP
 }
 
 export const shortcutEvent: Event<void> = Object.freeze(function (callback, context) {
-  const handle = setTimeout(callback.bind(context), 0)
+  let disposed = false
+  nextTick(() => disposed || callback.call(context))
   return {
     dispose() {
-      clearTimeout(handle)
+      disposed = true
     },
   }
 })
