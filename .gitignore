@@ -117,6 +117,3 @@ lib
 .pnp.*
 yarn.lock
 
-# build content
-/*.js
-/*.d.ts
