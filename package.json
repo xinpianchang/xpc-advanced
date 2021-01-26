@@ -1,7 +1,7 @@
 {
   "name": "xpc-advanced",
   "version": "1.0.0",
-  "description": "an advanced set of common managers based on xpc-common",
+  "description": "an advanced set of common utilities based on @newstudios/common",
   "main": "lib/index.js",
   "module": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -22,7 +22,22 @@
     "start": "npm run build:js -- --watch",
     "dryrun": "npm publish --access public --dry-run"
   },
-  "author": "TangYe",
+  "author": "TangYe <tangye@xinpianchang.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xinpianchang/xpc-advanced"
+  },
+  "keywords": [
+    "kvo",
+    "task",
+    "retry",
+    "advanced",
+    "javascript",
+    "common",
+    "utils",
+    "typescript"
+  ],
+  "homepage": "https://github.com/xinpianchang/xpc-advanced#readme",
   "license": "MIT",
   "husky": {
     "hooks": {
