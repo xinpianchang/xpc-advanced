@@ -1,6 +1,6 @@
 {
   "name": "xpc-advanced",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "description": "an advanced set of common utilities based on @newstudios/common",
   "main": "lib/index.js",
   "module": "dist/index.js",
