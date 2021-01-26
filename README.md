@@ -4,7 +4,7 @@
 
 ![Task State Machine](./task-state-machine.png)
 
-## Task API
+## Task API (1st rc release, API not stable)
 
 ### task.start
 
@@ -98,4 +98,12 @@ Unless a task is destroyed, you can set `task.dispatcher` a new value anytime yo
 
 # Retry
 
+Retry utility is used in any cases which need a retry strategy and cancellation possibility, see retry test cases for more information
+
 ## Retry API
+
+# Kvo
+
+Kvo utility is used to observe any properties's change `Event` in a `Disposable` instance, see kvo test cases for more information
+
+## Kvo API

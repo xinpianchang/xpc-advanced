@@ -5,7 +5,7 @@ import {
   CancellationTokenSource,
   createCancelablePromise,
   Disposable,
-  DisposableStore,
+  dispose,
   Emitter,
   Event,
   IDisposable,
@@ -598,6 +598,7 @@ export namespace Task {
 
     public asPromise() {
       return createCancelablePromise(token => {
+        const disposables: IDisposable[] = []
         return new Promise<Result>((resolve, reject) => {
           if (this._disposed) {
             reject(new Error(`task[${this.name}] is already disposed`))
@@ -611,17 +612,16 @@ export namespace Task {
             reject(this._error)
             return
           }
-          if (this.status === Status.abort) {
+          if (this.aborted) {
             reject(canceled())
             return
           }
 
-          token.onCancellationRequested(this.abort, this)
-
-          Event.toPromise(this.onResult).then(resolve)
-          Event.toPromise(this.onError).then(reject)
-          Event.toPromise(this.onAbort).then(() => reject(canceled()))
-        })
+          token.onCancellationRequested(this.abort, this, disposables)
+          this.onResult(resolve, null, disposables)
+          this.onError(reject, null, disposables)
+          this.onAbort(() => reject(canceled()), null, disposables)
+        }).finally(() => dispose(disposables))
       })
     }
 
@@ -642,20 +642,19 @@ export namespace Task {
       this.setStatus(Status.running)
 
       // task is about to run
-      const store = new DisposableStore()
+      const disposables: IDisposable[] = []
       let running = true
       const restart = this._restart
 
-      store.add(
+      disposables.push(
         toDisposable(() => {
           running = false
         })
       )
-      const finalize = store.dispose.bind(store)
 
       return new Promise<Result>((resolve, reject) => {
         // abort immediatelly because we need to
-        token.onCancellationRequested(() => reject(canceled()), null, store)
+        token.onCancellationRequested(() => reject(canceled()), null, disposables)
 
         const task = this
         const setState = (state: Partial<State> | ((prev: State) => State)) => {
@@ -694,7 +693,7 @@ export namespace Task {
         } else {
           resolve(result)
         }
-      }).finally(finalize)
+      }).finally(() => dispose(disposables))
     }
   }
 }

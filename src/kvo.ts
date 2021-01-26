@@ -48,30 +48,66 @@ export namespace Kvo {
     }
 
     const prop = capitalize(name)
-    const emitterKey = `__on${prop}Changed`
+    const emitterKey = `__on${prop}Changed__`
     let emitter: Emitter<ChangeEvent<any>> | undefined = target[emitterKey]
 
     if (!emitter) {
       const e = new Emitter<ChangeEvent<any>>()
       let val = target[name]
+      const oldDesc = Object.getOwnPropertyDescriptor(target, name)
+      const newDesc: PropertyDescriptor = {
+        // new descriptor cannot be configured any longer
+        configurable: false,
+        enumerable: true,
+      }
 
-      Object.defineProperties(target, {
-        [emitterKey]: {
-          value: target._register(e),
-        },
-        [name]: {
-          get() {
-            return val
-          },
-          set(current: any) {
-            if (val !== current) {
-              const prev = val
-              val = current
+      if (oldDesc) {
+        if (oldDesc.configurable === false) {
+          throw new Error(
+            `The property '${name}' of ${target} cannot be watched, because the descriptor has been set not-configured`
+          )
+        }
+
+        if (oldDesc.writable === false) {
+          throw new Error(`The property '${name}' of ${target} cannot be watched, because it is non-writable`)
+        }
+
+        // new descriptor's enumerable is the same as old one's
+        newDesc.enumerable = oldDesc.enumerable
+
+        if (oldDesc.get) {
+          if (!oldDesc.set) {
+            throw new Error(`The property '${name}' of ${target} cannot be watched, because it is readonly`)
+          }
+
+          const oldGet = oldDesc.get
+          newDesc.get = oldGet
+          const oldSet = oldDesc.set
+          newDesc.set = (newValue: any) => {
+            const prev = oldGet.call(target)
+            oldSet.call(target, newValue)
+            const current = oldGet.call(target)
+            if (prev !== current) {
               e.fire({ prev, current })
             }
-          },
-          enumerable: true,
-        },
+          }
+        }
+      }
+
+      if (!newDesc.get) {
+        newDesc.get = () => val
+        newDesc.set = (current: any) => {
+          if (val !== current) {
+            const prev = val
+            val = current
+            e.fire({ prev, current })
+          }
+        }
+      }
+
+      Object.defineProperties(target, {
+        [emitterKey]: { value: target._register(e) },
+        [name]: newDesc,
       })
 
       emitter = e

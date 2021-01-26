@@ -1,5 +1,4 @@
-import { Disposable, disposableTimeout, Event, timeout } from '@newstudios/common'
-import nextTick from 'next-tick'
+import { Disposable, disposableTimeout, Event } from '@newstudios/common'
 import { Kvo } from '..'
 
 const createClass = () => {
@@ -72,5 +71,53 @@ describe('Kvo module cases', () => {
     expect(fn).toHaveBeenCalledTimes(1)
     await promise
     expect(fn).toHaveBeenCalledTimes(2)
+  })
+
+  test('kvo observe descriptor enumable clone', () => {
+    expect.assertions(1)
+    class B extends Disposable {
+      public x = 0
+      constructor() {
+        super()
+        Object.defineProperty(this, 'x', {
+          value: 0,
+          enumerable: false,
+        })
+      }
+    }
+
+    const instance = new B()
+    Kvo.observe(instance, 'x')
+    let a = [] as string[]
+    for (let k in instance) {
+      a.push(k)
+    }
+    // only `Disposable#_store`
+    expect(a.length).toBe(1)
+  })
+
+  test("kvo observe descriptor preserves descriptor's getter and setter", () => {
+    expect.assertions(2)
+    class B extends Disposable {
+      public x = 0
+      private _b = 0
+      constructor() {
+        super()
+        Object.defineProperty(this, 'x', {
+          get: () => {
+            return this._b
+          },
+          set: (b: number) => {
+            this._b = b + 1
+          },
+        })
+      }
+    }
+
+    const instance = new B()
+    const event = Kvo.observe(instance, 'x')
+    event(evt => expect(evt.current).toBe(2))
+    instance.x = 1
+    expect(instance.x).toBe(2)
   })
 })
