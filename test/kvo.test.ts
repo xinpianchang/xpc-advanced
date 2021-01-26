@@ -87,7 +87,7 @@ describe('Kvo module cases', () => {
     }
 
     const instance = new B()
-    Kvo.observe(instance, 'x')
+    Kvo.observe(instance, 'x', Kvo.mapNoop)
     let a = [] as string[]
     for (let k in instance) {
       a.push(k)
@@ -119,5 +119,29 @@ describe('Kvo module cases', () => {
     event(evt => expect(evt.current).toBe(2))
     instance.x = 1
     expect(instance.x).toBe(2)
+  })
+
+  test('kvo observe descriptor getter test', () => {
+    expect.assertions(1)
+    class M extends Disposable {
+      private _a = 0
+      public on = Kvo.observe(this, 'a')
+
+      constructor(x: number) {
+        super()
+        this._a = x
+      }
+
+      get a() {
+        return this._a
+      }
+
+      set a(a: number) {
+        this._a = a
+      }
+    }
+
+    const m = new M(3)
+    expect(m.a).toBe(3)
   })
 })

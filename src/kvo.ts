@@ -1,5 +1,6 @@
 import { Disposable, Emitter, Event } from '@newstudios/common'
 import nextTick from 'next-tick'
+import { getPropertyDescriptorRecursively } from './utils'
 
 export function capitalize<T extends string>(str: T): Capitalize<T> {
   return `${str[0].toLocaleUpperCase()}${str.slice(1)}` as Capitalize<T>
@@ -18,6 +19,8 @@ export namespace Kvo {
   export function mapPrevious<T>({ prev }: ChangeEvent<T>) {
     return prev
   }
+
+  export function mapNoop() {}
 
   export function observe<
     R extends ChangeEvent<T[N]>,
@@ -54,7 +57,9 @@ export namespace Kvo {
     if (!emitter) {
       const e = new Emitter<ChangeEvent<any>>()
       let val = target[name]
-      const oldDesc = Object.getOwnPropertyDescriptor(target, name)
+
+      // get the property descriptor recursively into prototype chain
+      const [, oldDesc] = getPropertyDescriptorRecursively(target, name)
       const newDesc: PropertyDescriptor = {
         // new descriptor cannot be configured any longer
         configurable: false,

@@ -87,3 +87,19 @@ export function isCanceledError(err: unknown): err is Error & ({ name: 'Canceled
 export function isAbortError(err: unknown): err is Error & { name: 'AbortError' } {
   return err instanceof Error && err.name === 'AbortError'
 }
+
+export function getPropertyDescriptorRecursively(
+  target: any,
+  key: string | symbol
+): [any, PropertyDescriptor | undefined] {
+  const desc = Object.getOwnPropertyDescriptor(target, key)
+  if (desc) {
+    return [target, desc]
+  } else {
+    const proto = Object.getPrototypeOf(target)
+    if (proto) {
+      return getPropertyDescriptorRecursively(proto, key)
+    }
+    return [undefined, undefined]
+  }
+}
