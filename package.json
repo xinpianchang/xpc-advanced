@@ -1,5 +1,5 @@
 {
-  "name": "xpc-advanced",
+  "name": "@newstudios/advanced",
   "version": "0.1.0",
   "description": "an advanced set of common utilities based on @newstudios/common",
   "main": "lib/index.js",
@@ -91,5 +91,7 @@
   "files": [
     "dist",
     "lib"
-  ]
+  ],
+  "npmName": "@newstudios/advanced",
+  "sideEffects": false
 }
