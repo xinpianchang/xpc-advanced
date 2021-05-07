@@ -41,6 +41,16 @@ export namespace Retry {
      * @default delay 1000 ms
      */
     delay: number
+    /**
+     * the delay factor
+     * @default 2
+     */
+    factor: number
+    /**
+     * the max delay time in milliseconds
+     * @default 20000
+     */
+    max?: number
   }
 
   export type Runnable = (token: CancellationToken) => any
@@ -54,11 +64,14 @@ export namespace Retry {
     export const Default = {
       count: 3,
       delay: 1000,
+      factor: 2,
     } as const
 
     export const Forever = {
       count: -1,
       delay: 1000,
+      factor: 2,
+      max: 20000,
     } as const
 
     /**
@@ -67,11 +80,23 @@ export namespace Retry {
      * @param retryDelay the delay in milliseconds to start a new retry
      */
     export function create(
+      maxRetryCount: number,
+      retryDelay: number,
+      retryFactor?: number,
+      maxRetryDelay?: number
+    ): Callback
+    export function create(
+      maxRetryCount: number,
+      retryDelay: Promise<number> | ((count: number, token: CancellationToken) => number | Promise<number>)
+    ): Callback
+    export function create(
       maxRetryCount = 3,
       retryDelay:
         | number
         | Promise<number>
-        | ((count: number, token: CancellationToken) => number | Promise<number>) = 1000
+        | ((count: number, token: CancellationToken) => number | Promise<number>) = 1000,
+      retryFactor = 2,
+      maxRetryDelay = 20000
     ): Callback {
       return (err, count, token) =>
         asPromise(() => {
@@ -80,16 +105,25 @@ export namespace Retry {
           }
 
           // console.debug('prepare to start a retrying [count=%d] for %s', count + 1, err)
-
           const now = Date.now()
+
+          if (typeof retryDelay === 'number' && maxRetryDelay > retryDelay) {
+            if (retryFactor < 1) {
+              retryFactor = 1
+              console.warn('retryFactor should be larger than or equal to 1, the default factor is 2')
+            }
+            retryDelay = retryDelay * Math.pow(retryFactor, count)
+            retryDelay = Math.min(retryDelay, maxRetryDelay)
+          }
+
           const delayTask = () => (typeof retryDelay === 'function' ? retryDelay(count, token) : retryDelay)
           const timeoutTask = (delay: number) => timeout(delay - Date.now() + now, token)
           return asPromise(delayTask).then(timeoutTask)
         })
     }
 
-    export function from({ count, delay }: Strategy = Strategy.Default) {
-      return create(count, delay)
+    export function from({ count, delay, factor, max = 20000 }: Strategy = Strategy.Default) {
+      return create(count, delay, factor, max)
     }
   }
 

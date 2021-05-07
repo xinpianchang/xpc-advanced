@@ -9,7 +9,9 @@ import {
   Emitter,
   Event,
   IDisposable,
+  isDisposable,
   isThenable,
+  markTracked,
   toDisposable,
 } from '@newstudios/common'
 import { Kvo } from './kvo'
@@ -29,7 +31,9 @@ const shallowCompare = <T extends Record<string, any>>(prev: T, current: T) => {
   return true
 }
 
-export interface Task<Result, State> extends IDisposable {
+let _taskId = 1
+
+export interface Task<Result = any, State = {}> extends IDisposable {
   readonly onRestart: Event<void>
   readonly onStart: Event<void>
   readonly onPending: Event<void>
@@ -50,15 +54,18 @@ export interface Task<Result, State> extends IDisposable {
   readonly started: boolean
   readonly completed: boolean
   readonly destroyed: boolean
+  readonly id: string
   start(resetState?: boolean): void
   abort(): void
-  /**
-   * @deprecated use dispose instead
-   */
+  setState(state: Readonly<State>): void
+  resetState(): void
   destroy(): void
   asPromise(): CancelablePromise<Result>
   dispatcher: Task.Dispatcher
   name: string
+  /** some useful info when debugging */
+  readonly tag: string
+  readonly stack: string
 }
 
 /**
@@ -71,10 +78,12 @@ export interface Task<Result, State> extends IDisposable {
  *
  */
 export namespace Task {
+  type StateWithId<S> = S & { _id?: string }
+
   /**
    * Task creator
    * @param runnable task runnable factory
-   * @param initialState task init state, can be undefined or null, default to be `{}`
+   * @param initialState task init state, can be undefined or null, default to be `{}`, use `_id` to determinate the customed task.id
    * @param dispatcher a task dispatcher, default to be `Task.Dispatcher.Default` with no limit
    */
   export function create<Result>(
@@ -84,21 +93,18 @@ export namespace Task {
   ): Task<Result, {}>
   export function create<Result, State extends Record<string, any>>(
     runnable: Runnable<Result, State>,
-    initialState: State,
+    initialState: StateWithId<State>,
     dispatcher?: Dispatcher
   ): Task<Result, State>
   export function create<Result, State extends Record<string, any>>(
     runnable: Runnable<Result, State>,
-    initialState?: State | null,
+    initialState?: StateWithId<State> | null,
     dispatcher?: Dispatcher
   ) {
     return new InternalTask(runnable, (initialState || {}) as State, dispatcher)
   }
 
-  export interface ChangeEvent<S> {
-    prev: S
-    current: S
-  }
+  export type ChangeEvent<S> = Kvo.ChangeEvent<S>
 
   export interface Handler<S extends Record<string, any>> {
     /**
@@ -106,13 +112,21 @@ export namespace Task {
      */
     readonly token: CancellationToken
     /**
-     * Readonly latest task state
-     */
-    readonly state: Readonly<S>
-    /**
      * Readonly restart count, first time it is 0
      */
     readonly restart: number
+    /**
+     * Readonly task state delegation
+     */
+    readonly state: Readonly<S>
+    /**
+     * Readonly task id delegation
+     */
+    readonly id: string
+    /**
+     * Readonly task name delegation
+     */
+    readonly name: string
     /**
      * A state setter for the current task,
      * works like react class component's `setState`
@@ -120,6 +134,12 @@ export namespace Task {
      * so that it returns false instead
      */
     readonly setState: (state: Partial<S> | ((prev: S) => S)) => boolean
+    /**
+     * Reset the task state to the init state
+     * @returns true if setState works, sometimes it is out of running state
+     * so that it returns false instead
+     */
+    readonly resetState: () => boolean
   }
 
   export type Runnable<R, S> = (handler: Handler<S>) => R | Promise<R> | CancelablePromise<R>
@@ -142,13 +162,13 @@ export namespace Task {
      * Implementer should notice that task can be start mutiple times.
      * @param task the target task
      */
-    start<T>(task: Dispatcher.ITask<T>): void
+    onStart<T>(task: Dispatcher.ITask<T>): void
     /**
      * This will dequeue the task from the current dispatcher.
      * Implementor should completely remove the task from dispatcher.
      * @param task the target task
      */
-    stop<T>(task: Dispatcher.ITask<T>): void
+    onStop<T>(task: Dispatcher.ITask<T>): void
   }
 
   export namespace Dispatcher {
@@ -181,13 +201,14 @@ export namespace Task {
 
       constructor(private readonly maxParallel = 1) {
         super()
+        markTracked(this)
       }
 
       private get runningCount() {
         return this.runningSet.size
       }
 
-      start<T>(task: ITask<T>) {
+      onStart<T>(task: ITask<T>) {
         if (this._disposed) {
           task.setError(new Error('task dispatcher is already disposed'))
           return
@@ -200,7 +221,7 @@ export namespace Task {
         this.check()
       }
 
-      stop<T>(task: ITask<T>) {
+      onStop<T>(task: ITask<T>) {
         const source = this.runningSet.get(task)
         if (source) {
           this.runningSet.delete(task)
@@ -277,9 +298,11 @@ export namespace Task {
       }
 
       dispose() {
-        this._disposed = true
-        this.tokenSource.dispose(true)
-        super.dispose()
+        if (!this._disposed) {
+          this._disposed = true
+          this.tokenSource.dispose(true)
+          super.dispose()
+        }
       }
     }
 
@@ -318,6 +341,63 @@ export namespace Task {
     return false
   }
 
+  export interface JoinOptions<Result, State, S = {}> {
+    maxParallel?: number
+    dispatcher?: Dispatcher
+    onTaskStarted?: (
+      task: Task<Result, State>,
+      index: number,
+      parentHandler: Handler<S>,
+      disposables: IDisposable[]
+    ) => void | IDisposable
+    initState?: StateWithId<S>
+  }
+
+  /**
+   * Join tasks as a unique task
+   * @param tasks tasks to be join
+   * @param options.maxParallel max runnning count for these tasks, default is 1
+   * @param options.dispatcher the new joint task dispatcher
+   * @param options.onTaskStarted the callback when sub task started
+   * @param options.initState the new joint task init state
+   * @returns
+   */
+  export function join<Result, State, S = {}>(
+    tasks: readonly Task<Result, State>[],
+    options: JoinOptions<Result, State, S> = {}
+  ) {
+    const taskList = tasks.slice()
+    taskList.forEach(t => isInStatus(t.status, Status.pending, Status.running) && t.abort())
+    const { maxParallel = 1, dispatcher, onTaskStarted = () => {}, initState = {} as StateWithId<S> } = options
+
+    return Task.create(
+      h => {
+        const dispatcher = Dispatcher.create(maxParallel)
+        const disposables = [dispatcher] as IDisposable[]
+        return Promise.all(
+          taskList.map((t, index) => {
+            if (t.destroyed) {
+              return Promise.reject(new Error(`${t.tag} is already destroyed`))
+            }
+            if (t.completed) {
+              return Promise.resolve(t.result as Result)
+            }
+            t.dispatcher = dispatcher
+            h.token.onCancellationRequested(t.abort, t, disposables)
+            t.start()
+            const d = onTaskStarted(t, index, h, disposables)
+            if (d && isDisposable(d)) {
+              disposables.push(d)
+            }
+            return t.asPromise()
+          })
+        ).finally(() => dispose(disposables))
+      },
+      initState,
+      dispatcher
+    )
+  }
+
   class InternalTask<Result = any, State = any>
     extends Disposable
     implements Task<Result, State>, Dispatcher.ITask<Result> {
@@ -333,7 +413,10 @@ export namespace Task {
     )
     public readonly onStart = Event.signal(
       Event.filter(this.onStatusChange, ({ prev, current }) => {
-        return isInStatus(prev, Status.init) && isInStatus(current, Status.pending, Status.running)
+        return (
+          isInStatus(prev, Status.init, Status.abort, Status.error) &&
+          isInStatus(current, Status.pending, Status.running)
+        )
       })
     )
     public readonly onPending = Event.signal(
@@ -364,17 +447,17 @@ export namespace Task {
       () => this._result as Result
     )
 
-    private readonly _onStateChange = this._register(new Emitter<ChangeEvent<State>>())
-    public readonly onStateChange = this._onStateChange.event
-
     private readonly _onComplete = this._register(new Emitter<void>())
     public readonly onComplete: Event<void> = (listener, thisArgs?, disposables?) => {
       const event = this._disposed ? Event.None : this.completed ? shortcutEvent : this._onComplete.event
       return event(listener, thisArgs, disposables)
     }
 
-    private _disposed = false
     private _state: State
+    public readonly onStateChange = Kvo.observe(this, '_state')
+
+    private _disposing = false
+    private _disposed = false
     private _dispatcher: Dispatcher
     private _stack: string
 
@@ -384,38 +467,57 @@ export namespace Task {
     private _restart = 0
 
     public name: string
+    public readonly onNameChange = Kvo.observe(this, 'name')
+
     private readonly _initState: State
+    private readonly _id: string
     private internal = false
 
-    constructor(runnable: Runnable<Result, State>, initialState: State, dispatcher: Dispatcher = Dispatcher.Default) {
+    constructor(
+      runnable: Runnable<Result, State>,
+      initialState: StateWithId<State>,
+      dispatcher: Dispatcher = Dispatcher.Default
+    ) {
       super()
-      this.name = runnable.name || 'anonymous'
-      this._stack = new Error(`Task[${this.name}]`).stack!
+      // no need to track Task
+      markTracked(this)
 
-      this._initState = initialState
-      this._state = Object.assign({}, initialState)
+      const { _id = `Task-${_taskId++}`, ...initState } = initialState
+      this.name = runnable.name || 'anonymous'
+      this._stack = new Error(this.tag).stack!
+      this.onNameChange(() => (this._stack = this._stack.replace(/Error: .*\n/m, `Error: ${this.tag}\n`)))
+
+      this._id = _id
+      this._initState = initState as State
+      this._state = Object.assign({}, this._initState)
       this._dispatcher = dispatcher
+      this._runnable = runnable
 
       // register status change handler
-      this._register(
-        Event.filter(this.onStatusChange, ({ current }) => current === Status.complete)(() => this._onComplete.fire())
-      )
+      this.onStatusChange(({ current }) => current === Status.complete && this._onComplete.fire())
 
       // register restart counter handler
       this.onRestart(() => this._restart++)
+    }
 
-      this._runnable = runnable
+    public get tag() {
+      return `Task[${this.name}]`
+    }
+
+    public get id() {
+      return this._id
     }
 
     private warn(message: any, ...args: any[]) {
-      !this.internal && console.warn(`Task[${this.name}]:`, message, ...args)
+      !this.internal && console.warn(`${this.tag}:`, message, ...args)
     }
 
-    private callWithoutWarn(block: () => void) {
+    private callWithoutWarn<T>(block: () => T): T {
       let internal = this.internal
       this.internal = true
-      block()
+      const r = block()
       this.internal = internal
+      return r
     }
 
     public set dispatcher(dispatcher: Dispatcher) {
@@ -449,19 +551,24 @@ export namespace Task {
       return this._status
     }
 
-    public setState(current: State) {
-      if (this._state !== current) {
-        const prev = this._state
-        this._state = current
-
-        // FIXME?
-        if (!shallowCompare(prev, current)) {
-          this._onStateChange.fire({
-            prev,
-            current,
-          })
-        }
+    public setState(current: Readonly<State>) {
+      if (this.destroyed) {
+        this.warn('task is already destroyed, so it could not be started')
+        return
       }
+
+      if (this.completed) {
+        this.warn('task is alrady completed, so its state cannot be changed / reset')
+        return
+      }
+
+      if (!shallowCompare(this._state, current)) {
+        this._state = current
+      }
+    }
+
+    public resetState() {
+      this.setState(this._initState)
     }
 
     private setStatus(current: Status) {
@@ -548,12 +655,12 @@ export namespace Task {
         return
       }
 
-      // FIXME set before or after starting
+      // FIXME set before or after starting, and emit onReset or not
       if (resetState) {
         this.setState(this._initState)
       }
 
-      this.dispatcher.start(this)
+      this.dispatcher.onStart(this)
 
       if (!this.running) {
         this.setStatus(Status.pending)
@@ -569,7 +676,7 @@ export namespace Task {
         console.warn('task is completed or distroyed')
         return
       }
-      this.dispatcher.stop(this)
+      this.dispatcher.onStop(this)
       this.setStatus(Status.abort)
     }
 
@@ -586,12 +693,14 @@ export namespace Task {
     }
 
     public dispose() {
-      if (!this._disposed) {
+      if (!this._disposed && !this._disposing) {
         this.callWithoutWarn(() => {
+          this._disposing = true
           this.abort()
           this.setStatus(Status.complete)
           super.dispose()
           this._disposed = true
+          this._disposing = false
         })
       }
     }
@@ -601,7 +710,7 @@ export namespace Task {
         const disposables: IDisposable[] = []
         return new Promise<Result>((resolve, reject) => {
           if (this._disposed) {
-            reject(new Error(`task[${this.name}] is already disposed`))
+            reject(new Error(`${this.tag} is already disposed`))
             return
           }
           if (this._done) {
@@ -670,9 +779,22 @@ export namespace Task {
           task.setState(newState)
           return true
         }
+        const resetState = () => {
+          if (!running) {
+            return false
+          }
+          task.setState(task._initState)
+          return true
+        }
         const handler: Handler<State> = {
           get state() {
             return task.state
+          },
+          get id() {
+            return task.id
+          },
+          get name() {
+            return task.name
           },
           get token() {
             return token
@@ -682,6 +804,9 @@ export namespace Task {
           },
           get setState() {
             return setState
+          },
+          get resetState() {
+            return resetState
           },
         }
 

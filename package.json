@@ -92,6 +92,28 @@
     "dist",
     "lib"
   ],
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "default": "./lib/index.js"
+    },
+    "./kvo": {
+      "import": "./dist/kvo.js",
+      "default": "./lib/kvo.js"
+    },
+    "./retry": {
+      "import": "./dist/retry.js",
+      "default": "./lib/retry.js"
+    },
+    "./task": {
+      "import": "./dist/task.js",
+      "default": "./lib/task.js"
+    },
+    "./utils": {
+      "import": "./dist/utils.js",
+      "default": "./lib/utils.js"
+    }
+  },
   "npmName": "@newstudios/advanced",
   "sideEffects": false
 }

@@ -38,20 +38,15 @@ export function normalizeCancelablePromiseWithToken<T>(
 }
 
 export function abortSignalToCancellationToken(signal: AbortSignal) {
-  const onAbort = Event.fromDOMEventEmitter<globalThis.Event>(signal, 'abort')
-  let d: IDisposable | undefined = undefined
+  const onAbort = Event.once(Event.fromDOMEventEmitter<globalThis.Event>(signal, 'abort'))
+  let d: IDisposable | undefined
 
   const emitter = new Emitter<void>({
     onFirstListenerAdd() {
-      if (!signal.aborted) {
-        d = onAbort(() => emitter.fire())
-      }
+      d = onAbort(() => emitter.fire())
     },
     onLastListenerRemove() {
-      if (d) {
-        d.dispose()
-        d = undefined
-      }
+      d?.dispose()
     },
   })
 
