@@ -1,5 +1,5 @@
 import { Disposable, disposableTimeout, Event } from '@newstudios/common'
-import { Kvo } from '..'
+import { getPropertyDescriptorRecursively, Kvo } from '..'
 
 const createClass = () => {
   return class A extends Disposable {
@@ -154,9 +154,15 @@ describe('Kvo module cases', () => {
     const fn = jest.fn()
     const fn2 = jest.fn()
 
+    const [t1, d1] = getPropertyDescriptorRecursively(a, 'n')
+
     const observable = Kvo.from(a)
+    const observable2 = Kvo.from(a)
     const event = observable.observe('m')
     const event2 = observable.observe('n')
+    const [t2, d2] = getPropertyDescriptorRecursively(a, 'n')
+    observable2.observe('n')
+
     event(fn)
     event2(fn2)
 
@@ -166,6 +172,25 @@ describe('Kvo module cases', () => {
     expect(fn).toHaveBeenCalledTimes(1)
     expect(fn2).toHaveBeenCalledTimes(0)
     observable.dispose()
+
+    const [t3, d3] = getPropertyDescriptorRecursively(a, 'n')
+
+    expect(t1).toStrictEqual(t2)
+    expect(t1).toStrictEqual(t3)
+    expect(d1).not.toBe(d2)
+    expect(d2).toStrictEqual(d3)
+
+    observable2.dispose()
+
+    const [, d4] = getPropertyDescriptorRecursively(a, 'n')
+    expect(d2).toStrictEqual(d4)
+
+    const observable3 = Kvo.from(a)
+    const fn3 = jest.fn()
+    observable3.observe('n')(fn3)
+
+    a.n = 'dsf'
+    expect(fn3).toHaveBeenCalledTimes(1)
 
     a.m = 5
     expect(fn).toHaveBeenCalledTimes(1)

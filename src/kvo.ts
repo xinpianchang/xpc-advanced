@@ -1,4 +1,4 @@
-import { Disposable, Emitter, Event } from '@newstudios/common'
+import { Disposable, Emitter, Event, MutableDisposable } from '@newstudios/common'
 import nextTick from 'next-tick'
 import { getPropertyDescriptorRecursively, isDisposed } from './utils'
 
@@ -78,96 +78,50 @@ export namespace Kvo {
       }
 
       const that = this as unknown as {
-        [key in typeof emitterKey]?: Emitter<ChangeEvent<any>>
+        [key in typeof emitterKey]?: Emitter<ChangeEvent<T[string]>>
       }
-
-      const target = this.target
 
       const prop = capitalize(name)
       const emitterKey = `__on${prop}Changed__` as const
-      let emitter: Emitter<ChangeEvent<any>> | undefined = that[emitterKey]
+      let emitter = that[emitterKey]
 
       if (!emitter) {
-        const e = new Emitter<ChangeEvent<any>>()
-        let val = target[name]
+        const target = this.target
+        const event = getChangeEvent(target, name)
+        const mutable = this._register(new MutableDisposable())
 
-        // get the property descriptor recursively into prototype chain
-        const [, oldDesc] = getPropertyDescriptorRecursively(target, name)
-        const newDesc: PropertyDescriptor = {
-          // new descriptor cannot be configured any longer
-          configurable: false,
-          enumerable: true,
-        }
-
-        if (oldDesc) {
-          if (oldDesc.configurable === false) {
-            throw new Error(
-              `The property '${name}' of ${target} cannot be watched, because the descriptor has been set not-configured`
-            )
-          }
-
-          if (oldDesc.writable === false) {
-            throw new Error(`The property '${name}' of ${target} cannot be watched, because it is non-writable`)
-          }
-
-          // new descriptor's enumerable is the same as old one's
-          newDesc.enumerable = oldDesc.enumerable
-
-          if (oldDesc.get) {
-            if (!oldDesc.set) {
-              throw new Error(`The property '${name}' of ${target} cannot be watched, because it is readonly`)
-            }
-
-            const oldGet = oldDesc.get
-            newDesc.get = oldGet
-            const oldSet = oldDesc.set
-            newDesc.set = (newValue: any) => {
-              const prev = oldGet.call(target)
-              oldSet.call(target, newValue)
-              const current = oldGet.call(target)
-              if (prev !== current) {
-                e.fire({ prev, current })
+        // register to this disposable
+        const e = this._register(
+          new Emitter<ChangeEvent<T[string]>>({
+            onFirstListenerAdd: () => {
+              if (!isDisposed(mutable)) {
+                mutable.value = event(e.fire, e)
               }
-            }
-          }
-        }
-
-        if (!newDesc.get) {
-          newDesc.get = () => val
-          newDesc.set = (current: any) => {
-            if (val !== current) {
-              const prev = val
-              val = current
-              e.fire({ prev, current })
-            }
-          }
-        }
-
-        Object.defineProperties(target, {
-          [name]: newDesc,
-        })
-
-        Object.defineProperties(that, {
-          [emitterKey]: { value: this._register(e) },
-        })
+            },
+            onLastListenerRemove: () => {
+              mutable.value = undefined
+            },
+          })
+        )
 
         emitter = e
+        that[emitterKey] = emitter
       }
 
       const map = typeof mapOrAsync === 'function' ? mapOrAsync : undefined
       async = typeof mapOrAsync === 'boolean' ? mapOrAsync : async
 
-      const originEvent = emitter.event
-      let newEvent = originEvent
-
-      if (async) {
-        newEvent = (listener, thisArg?, disposables?) => {
-          return originEvent(evt => nextTick(() => listener.call(thisArg, evt)), null, disposables)
-        }
-      }
+      let newEvent = emitter.event
 
       if (map) {
-        return Event.map(newEvent, map)
+        newEvent = Event.map(newEvent, map)
+      }
+
+      if (async) {
+        const origEvent = newEvent
+        newEvent = (listener, thisArg?, disposables?) => {
+          return origEvent(evt => nextTick(() => listener.call(thisArg, evt)), null, disposables)
+        }
       }
 
       return newEvent
@@ -177,4 +131,80 @@ export namespace Kvo {
   export function from<T extends Record<string | number, any>>(target: T) {
     return new Observable<T>(target)
   }
+}
+
+const MapToEvents = new WeakMap<object, Record<string, Event<any>>>()
+
+function getChangeEvent<T extends Record<string | number, any>, N extends string>(target: T, name: N) {
+  let events = MapToEvents.get(target)
+  if (!events) {
+    events = {}
+    MapToEvents.set(target, events)
+  }
+  let event = events[name]
+  if (!event) {
+    const e = new Emitter<Kvo.ChangeEvent<T[N]>>()
+    let val = target[name]
+
+    // get the property descriptor recursively into prototype chain
+    const [, oldDesc] = getPropertyDescriptorRecursively(target, name)
+    const newDesc: PropertyDescriptor = {
+      // new descriptor cannot be configured any longer
+      configurable: false,
+      enumerable: true,
+    }
+
+    if (oldDesc) {
+      if (oldDesc.configurable === false) {
+        throw new Error(
+          `The property '${name}' of ${target} cannot be watched, because the descriptor has been set not-configured`
+        )
+      }
+
+      if (oldDesc.writable === false) {
+        throw new Error(`The property '${name}' of ${target} cannot be watched, because it is non-writable`)
+      }
+
+      // new descriptor's enumerable is the same as old one's
+      newDesc.enumerable = oldDesc.enumerable
+
+      if (oldDesc.get) {
+        if (!oldDesc.set) {
+          throw new Error(`The property '${name}' of ${target} cannot be watched, because it is readonly`)
+        }
+
+        const oldGet = oldDesc.get
+        newDesc.get = oldGet
+        const oldSet = oldDesc.set
+        newDesc.set = (newValue: any) => {
+          const prev = oldGet.call(target)
+          oldSet.call(target, newValue)
+          const current = oldGet.call(target)
+          if (prev !== current) {
+            e.fire({ prev, current })
+          }
+        }
+      }
+    }
+
+    if (!newDesc.get) {
+      newDesc.get = () => val
+      newDesc.set = (current: any) => {
+        if (val !== current) {
+          const prev = val
+          val = current
+          e.fire({ prev, current })
+        }
+      }
+    }
+
+    Object.defineProperties(target, {
+      [name]: newDesc,
+    })
+
+    event = e.event
+    events[name] = event
+  }
+
+  return event as Event<Kvo.ChangeEvent<T[N]>>
 }
