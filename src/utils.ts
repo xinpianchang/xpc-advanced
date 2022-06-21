@@ -1,6 +1,7 @@
 import {
   CancelablePromise,
   CancellationToken,
+  Disposable,
   DisposableStore,
   Emitter,
   Event,
@@ -97,4 +98,20 @@ export function getPropertyDescriptorRecursively(
     }
     return [undefined, undefined]
   }
+}
+
+export function isDisposed(target: unknown): boolean {
+  if (!target || typeof target !== 'object') {
+    console.warn(
+      'not a supported disposable, should be one of Disposable/DisposableStore/MutableDisposable or any object with _isDisposed member'
+    )
+    return false
+  }
+  if (target instanceof Disposable) {
+    return isDisposed((target as any)._store)
+  }
+  if ('_isDisposed' in target && typeof (target as any)._isDisposed === 'boolean') {
+    return (target as any)._isDisposed as boolean
+  }
+  return false
 }

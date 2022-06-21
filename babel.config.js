@@ -5,7 +5,6 @@ module.exports = {
       {
         targets: { esmodules: true },
         bugfixes: true,
-        loose: true,
         modules: process.env.ESM ? false : 'cjs',
       },
     ],

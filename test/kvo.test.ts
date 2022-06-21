@@ -144,4 +144,30 @@ describe('Kvo module cases', () => {
     const m = new M(3)
     expect(m.a).toBe(3)
   })
+
+  test.only('kvo observable test', () => {
+    const a = {
+      m: 3,
+      n: '2bc',
+    }
+
+    const fn = jest.fn()
+    const fn2 = jest.fn()
+
+    const observable = Kvo.from(a)
+    const event = observable.observe('m')
+    const event2 = observable.observe('n')
+    event(fn)
+    event2(fn2)
+
+    a.m = 4
+    a.n = '2bc'
+
+    expect(fn).toHaveBeenCalledTimes(1)
+    expect(fn2).toHaveBeenCalledTimes(0)
+    observable.dispose()
+
+    a.m = 5
+    expect(fn).toHaveBeenCalledTimes(1)
+  })
 })
