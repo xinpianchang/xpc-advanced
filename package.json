@@ -27,6 +27,9 @@
     "type": "git",
     "url": "git+https://github.com/xinpianchang/xpc-advanced"
   },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org"
+  },
   "keywords": [
     "kvo",
     "task",
