@@ -1,4 +1,4 @@
-import { Disposable, disposableTimeout, Event } from '@newstudios/common'
+import { Disposable, disposableTimeout, Event, timeout } from '@newstudios/common'
 import { getPropertyDescriptorRecursively, Kvo } from '..'
 
 const createClass = () => {
@@ -145,7 +145,7 @@ describe('Kvo module cases', () => {
     expect(m.a).toBe(3)
   })
 
-  test.only('kvo observable test', () => {
+  test('kvo observable test', () => {
     const a = {
       m: 3,
       n: '2bc',
@@ -195,4 +195,26 @@ describe('Kvo module cases', () => {
     a.m = 5
     expect(fn).toHaveBeenCalledTimes(1)
   })
+})
+
+test('kvo observable test', async () => {
+  expect.assertions(1)
+  const C = createClass()
+  const c = new C()
+
+  c.dispose()
+
+  const obs = Kvo.from(c)
+
+  const evt = obs.observe('x')
+  const evt2 = Kvo.observe(c, 'x')
+
+  const fn = jest.fn()
+  evt(fn)
+  evt2(fn)
+
+  c.x = 3
+  await timeout(0)
+  c.x = 4
+  expect(fn).toHaveBeenCalledTimes(1)
 })

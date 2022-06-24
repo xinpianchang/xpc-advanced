@@ -73,7 +73,7 @@ export namespace Kvo {
     public observe<R extends ChangeEvent<T[N]>, N extends string = string>(name: N, async?: boolean): Event<R>
     public observe<R, N extends string = string>(name: N, map: (evt: ChangeEvent<T[N]>) => R, async?: boolean): Event<R>
     public observe(name: string, mapOrAsync?: ((evt: ChangeEvent<any>) => any) | boolean, async = false) {
-      if (isDisposed(this) || isDisposed(this.target)) {
+      if (isDisposed(this)) {
         return Event.None
       }
 

@@ -17,9 +17,7 @@ describe('Retry module cases', () => {
 
   test('run async normal', async () => {
     expect.assertions(1)
-    const value = await Retry.run(
-      () => new Promise<number>(resolve => setTimeout(() => resolve(4), 2000))
-    )
+    const value = await Retry.run(() => new Promise<number>(resolve => setTimeout(() => resolve(4), 2000)))
     expect(value).toBe(4)
   })
 
@@ -58,7 +56,7 @@ describe('Retry module cases', () => {
 
   test('factory with forever retry strategy', () => {
     expect.assertions(1)
-    const retry = Retry.factory().strategy({ count: -1, delay: 0 })
+    const retry = Retry.factory().strategy({ count: -1, delay: 0, factor: 2 })
     const task = createTask(15, 100, 'ok')
     return expect(retry.run(task)).resolves.toBe('ok')
   })
