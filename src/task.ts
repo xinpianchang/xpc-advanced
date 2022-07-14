@@ -33,14 +33,14 @@ const shallowCompare = <T extends Record<string, any>>(prev: T, current: T) => {
 
 let _taskId = 1
 
-export interface Task<Result = any, State = {}> extends IDisposable {
+export interface Task<Result = any, State = {}, Err = unknown> extends IDisposable {
   readonly onRestart: Event<void>
   readonly onStart: Event<void>
   readonly onPending: Event<void>
   readonly onRunning: Event<void>
   readonly onAbort: Event<void>
   readonly onComplete: Event<void>
-  readonly onError: Event<unknown>
+  readonly onError: Event<Err>
   readonly onResult: Event<Result>
   readonly onStatusChange: Event<Task.ChangeEvent<Task.Status>>
   readonly onStateChange: Event<Task.ChangeEvent<State>>
@@ -61,6 +61,8 @@ export interface Task<Result = any, State = {}> extends IDisposable {
   resetState(): void
   destroy(): void
   asPromise(): CancelablePromise<Result>
+  toRunnable(): (token: CancellationToken) => Promise<Result>
+  clone(taskId?: string): Task<Result, State>
   dispatcher: Task.Dispatcher
   name: string
   /** some useful info when debugging */
@@ -68,13 +70,23 @@ export interface Task<Result = any, State = {}> extends IDisposable {
   readonly stack: string
 }
 
+const _STATUS = {
+  init: 'init',
+  pending: 'pending',
+  running: 'running',
+  error: 'error',
+  abort: 'abort',
+  complete: 'complete',
+} as const
+
 /**
- * A task's lifecycle can be either one of 6 states which are ```init | pending | running | error | abort | complete```.
+ * A task's lifecycle can be either one of 6 statuses which are ```init | pending | running | error | abort | complete```.
  *
- * Tasks can be aborted upon init, pending or running state, and can be restarted right upon error and abort state.
+ * Tasks can be aborted upon init, pending or running status, and can be restarted right upon error and abort status.
  *
  * Once a task is completed, it will no longer emit any other events.
- * Special case when it is completed but not disposed, it can still handle onComplete event since it will emit it each time you subscribe.
+ * Special case when it is completed but not disposed, it can still handle onComplete event, it will emit it immediately
+ * each time you subscribe, until disposed.
  *
  */
 export namespace Task {
@@ -86,17 +98,17 @@ export namespace Task {
    * @param initialState task init state, can be undefined or null, default to be `{}`, use `_id` to determinate the customed task.id
    * @param dispatcher a task dispatcher, default to be `Task.Dispatcher.Default` with no limit
    */
-  export function create<Result>(
+  export function create<Result, Err = unknown>(
     runnable: Runnable<Result, {}>,
     initialState?: null,
     dispatcher?: Dispatcher
-  ): Task<Result, {}>
-  export function create<Result, State extends Record<string, any>>(
+  ): Task<Result, {}, Err>
+  export function create<Result, State extends Record<string, any>, Err = unknown>(
     runnable: Runnable<Result, State>,
     initialState: StateWithId<State>,
     dispatcher?: Dispatcher
-  ): Task<Result, State>
-  export function create<Result, State extends Record<string, any>>(
+  ): Task<Result, State, Err>
+  export function create<Result, State extends Record<string, any>, Err = unknown>(
     runnable: Runnable<Result, State>,
     initialState?: StateWithId<State> | null,
     dispatcher?: Dispatcher
@@ -142,16 +154,11 @@ export namespace Task {
     readonly resetState: () => boolean
   }
 
+  /** Task Runnable function which takes one handler argument and sync/async returns a final result */
   export type Runnable<R, S> = (handler: Handler<S>) => R | Promise<R> | CancelablePromise<R>
 
-  export const Status = {
-    init: 'init',
-    pending: 'pending',
-    running: 'running',
-    error: 'error',
-    abort: 'abort',
-    complete: 'complete',
-  } as const
+  /** Status map */
+  export const Status = Object.freeze ? Object.freeze(_STATUS) : _STATUS
 
   export type Status = keyof typeof Status
 
@@ -162,40 +169,40 @@ export namespace Task {
      * Implementer should notice that task can be start mutiple times.
      * @param task the target task
      */
-    onStart<T>(task: Dispatcher.ITask<T>): void
+    onStart<Result, Err = any>(task: Dispatcher.ITask<Result, Err>): void
     /**
      * This will dequeue the task from the current dispatcher.
      * Implementor should completely remove the task from dispatcher.
      * @param task the target task
      */
-    onStop<T>(task: Dispatcher.ITask<T>): void
+    onStop<Result, Err = any>(task: Dispatcher.ITask<Result, Err>): void
   }
 
   export namespace Dispatcher {
-    export interface ITask<T> {
+    export interface ITask<Result = any, Err = any> {
       /**
        * Call this to make task running.
        * Should provide a cancellation token for the task.
        * Moreover, the process will invoke `setResult` / `setError` internally when needed
        * @param token the cancellation token
        */
-      run(token: CancellationToken): Promise<T>
+      run(token: CancellationToken): Promise<Result>
       /**
        * Set the final successful result of the task.
        * @param result the final result
        */
-      setResult(result: T): void
+      setResult(result: Result): void
       /**
        * Set the error state of the task.
        * Typically set `Canceled` error when you need to abort the task
        * @param error the error you need to notify task with
        */
-      setError(error: any): void
+      setError(error: Err): void
     }
 
     class InternalDefaultDispatcher extends Disposable implements Dispatcher {
-      private readonly runningSet = new Map<ITask<any>, CancellationTokenSource>()
-      private readonly queue = [] as ITask<any>[]
+      private readonly runningSet = new Map<ITask, CancellationTokenSource>()
+      private readonly queue = [] as ITask[]
       private readonly tokenSource = new CancellationTokenSource()
       private _disposed = false
 
@@ -208,7 +215,7 @@ export namespace Task {
         return this.runningSet.size
       }
 
-      onStart<T>(task: ITask<T>) {
+      onStart<Result, Err = any>(task: ITask<Result, Err>) {
         if (this._disposed) {
           task.setError(new Error('task dispatcher is already disposed'))
           return
@@ -368,7 +375,7 @@ export namespace Task {
   ) {
     const taskList = tasks.slice()
     taskList.forEach(t => isInStatus(t.status, Status.pending, Status.running) && t.abort())
-    const { maxParallel = 1, dispatcher, onTaskStarted = () => {}, initState = {} as StateWithId<S> } = options
+    const { maxParallel = 1, dispatcher, onTaskStarted, initState = {} as StateWithId<S> } = options
 
     return Task.create(
       h => {
@@ -385,9 +392,11 @@ export namespace Task {
             t.dispatcher = dispatcher
             h.token.onCancellationRequested(t.abort, t, disposables)
             t.start()
-            const d = onTaskStarted(t, index, h, disposables)
-            if (d && isDisposable(d)) {
-              disposables.push(d)
+            if (t.started && onTaskStarted) {
+              const d = onTaskStarted(t, index, h, disposables)
+              if (d && isDisposable(d)) {
+                disposables.push(d)
+              }
             }
             return t.asPromise()
           })
@@ -398,9 +407,9 @@ export namespace Task {
     )
   }
 
-  class InternalTask<Result = any, State = any>
+  class InternalTask<Result = any, State = any, Err = unknown>
     extends Disposable
-    implements Task<Result, State>, Dispatcher.ITask<Result> {
+    implements Task<Result, State, Err>, Dispatcher.ITask<Result, Err> {
     private readonly _runnable: Runnable<Result, State>
 
     private _status: Status = Status.init
@@ -692,6 +701,11 @@ export namespace Task {
       return this._disposed
     }
 
+    public clone(taskId?: string) {
+      const initState = typeof taskId === 'undefined' ? this._initState : { _id: taskId, ...this._initState }
+      return Task.create(this._runnable, initState, this.dispatcher)
+    }
+
     public dispose() {
       if (!this._disposed && !this._disposing) {
         this.callWithoutWarn(() => {
@@ -706,7 +720,11 @@ export namespace Task {
     }
 
     public asPromise() {
-      return createCancelablePromise(token => {
+      return createCancelablePromise(this.toRunnable())
+    }
+
+    public toRunnable() {
+      return (token: CancellationToken) => {
         const disposables: IDisposable[] = []
         return new Promise<Result>((resolve, reject) => {
           if (this._disposed) {
@@ -731,7 +749,7 @@ export namespace Task {
           this.onError(reject, null, disposables)
           this.onAbort(() => reject(canceled()), null, disposables)
         }).finally(() => dispose(disposables))
-      })
+      }
     }
 
     public run(token: CancellationToken): Promise<Result> {

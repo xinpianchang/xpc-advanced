@@ -54,7 +54,7 @@ export namespace Retry {
   }
 
   export type Runnable = (token: CancellationToken) => any
-  type PromiseReturnType<T extends Function> = T extends (...args: any[]) => infer R
+  export type PromiseReturnType<T extends Function> = T extends (...args: any[]) => infer R
     ? R extends Promise<infer RR>
       ? RR
       : R
@@ -129,8 +129,12 @@ export namespace Retry {
 
   abstract class AbstractFactory {
     protected s: Strategy | Callback = Strategy.Default
-    public strategy(strategy: Strategy | Callback) {
-      this.s = strategy
+    public strategy(strategy: Partial<Strategy> | Callback) {
+      if (typeof strategy === 'function') {
+        this.s = strategy
+      } else {
+        this.s = Object.assign({}, Strategy.Default, strategy)
+      }
       return this
     }
 

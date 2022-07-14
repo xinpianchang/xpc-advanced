@@ -109,7 +109,6 @@ Kvo utility is used to observe the object key change, and produce an `Event`, se
 ## Kvo API
 
 ```typescript
-
 const a = {
   foo: 0,
   bar: 'init',
@@ -133,12 +132,31 @@ observable.dispose()
 a.foo = 2
 
 class B {
- private foo: 'bar'
+  private foo: 'bar'
 }
 
 const b = new B()
 
-// able to observe private properties, produce Event<Kvo.ChangeEvent<string>>
+// able to observe private properties, produce `Event<Kvo.ChangeEvent<string>>`
 const onFooChange2 = Kvo.from(b).observe('foo')
 
+class C extends Disposable {
+  public foo = 'bar'
+
+  // produce an `Event<Kvo.ChangeEvent<string>>` directly
+  public readonly onFooChange = Kvo.observe(this, 'foo')
+}
+
+const c = new C()
+
+// register a listener
+c.onFooChange(evt => console.log(evt))
+
+/** should print out { current: 'bar2', prev: 'bar', ... } */
+c.foo = 'bar2'
+
+c.dispose()
+
+// no prints any longer
+c.foo = 'bar3'
 ```
