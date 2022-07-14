@@ -33,21 +33,21 @@ const shallowCompare = <T extends Record<string, any>>(prev: T, current: T) => {
 
 let _taskId = 1
 
-export interface Task<Result = any, State = {}, Err = unknown> extends IDisposable {
+export interface Task<Result = any, State = {}> extends IDisposable {
   readonly onRestart: Event<void>
   readonly onStart: Event<void>
   readonly onPending: Event<void>
   readonly onRunning: Event<void>
   readonly onAbort: Event<void>
   readonly onComplete: Event<void>
-  readonly onError: Event<Err>
+  readonly onError: Event<unknown>
   readonly onResult: Event<Result>
   readonly onStatusChange: Event<Task.ChangeEvent<Task.Status>>
   readonly onStateChange: Event<Task.ChangeEvent<State>>
   readonly state: Readonly<State>
   readonly status: Task.Status
   readonly result?: Result
-  readonly error?: any
+  readonly error?: unknown
   readonly pending: boolean
   readonly running: boolean
   readonly aborted: boolean
@@ -98,17 +98,17 @@ export namespace Task {
    * @param initialState task init state, can be undefined or null, default to be `{}`, use `_id` to determinate the customed task.id
    * @param dispatcher a task dispatcher, default to be `Task.Dispatcher.Default` with no limit
    */
-  export function create<Result, Err = unknown>(
+  export function create<Result>(
     runnable: Runnable<Result, {}>,
     initialState?: null,
     dispatcher?: Dispatcher
-  ): Task<Result, {}, Err>
-  export function create<Result, State extends Record<string, any>, Err = unknown>(
+  ): Task<Result, {}>
+  export function create<Result, State extends Record<string, any>>(
     runnable: Runnable<Result, State>,
     initialState: StateWithId<State>,
     dispatcher?: Dispatcher
-  ): Task<Result, State, Err>
-  export function create<Result, State extends Record<string, any>, Err = unknown>(
+  ): Task<Result, State>
+  export function create<Result, State extends Record<string, any>>(
     runnable: Runnable<Result, State>,
     initialState?: StateWithId<State> | null,
     dispatcher?: Dispatcher
@@ -169,17 +169,17 @@ export namespace Task {
      * Implementer should notice that task can be start mutiple times.
      * @param task the target task
      */
-    onStart<Result, Err = any>(task: Dispatcher.ITask<Result, Err>): void
+    onStart(task: Dispatcher.ITask): void
     /**
      * This will dequeue the task from the current dispatcher.
      * Implementor should completely remove the task from dispatcher.
      * @param task the target task
      */
-    onStop<Result, Err = any>(task: Dispatcher.ITask<Result, Err>): void
+    onStop(task: Dispatcher.ITask): void
   }
 
   export namespace Dispatcher {
-    export interface ITask<Result = any, Err = any> {
+    export interface ITask<Result = any> {
       /**
        * Call this to make task running.
        * Should provide a cancellation token for the task.
@@ -197,7 +197,7 @@ export namespace Task {
        * Typically set `Canceled` error when you need to abort the task
        * @param error the error you need to notify task with
        */
-      setError(error: Err): void
+      setError(error: unknown): void
     }
 
     class InternalDefaultDispatcher extends Disposable implements Dispatcher {
@@ -215,7 +215,7 @@ export namespace Task {
         return this.runningSet.size
       }
 
-      onStart<Result, Err = any>(task: ITask<Result, Err>) {
+      onStart(task: ITask) {
         if (this._disposed) {
           task.setError(new Error('task dispatcher is already disposed'))
           return
@@ -228,7 +228,7 @@ export namespace Task {
         this.check()
       }
 
-      onStop<T>(task: ITask<T>) {
+      onStop(task: ITask) {
         const source = this.runningSet.get(task)
         if (source) {
           this.runningSet.delete(task)
@@ -335,11 +335,12 @@ export namespace Task {
       if (maxParallel < 1) {
         throw new Error('Parameter maxParallel should be lager than 0')
       }
+
       return new InternalDefaultDispatcher(maxParallel)
     }
   }
 
-  export function isInStatus(src: Status, ...dest: Status[]) {
+  export function isInStatus<T extends Status>(src: Status, ...dest: ReadonlyArray<T>): src is T {
     for (let i = 0; i < dest.length; i++) {
       if (src === dest[i]) {
         return true
@@ -348,16 +349,16 @@ export namespace Task {
     return false
   }
 
-  export interface JoinOptions<Result, State, S = {}> {
+  export interface JoinOptions<Result, ChildState, JoinState = {}> {
     maxParallel?: number
     dispatcher?: Dispatcher
     onTaskStarted?: (
-      task: Task<Result, State>,
+      task: Task<Result, ChildState>,
       index: number,
-      parentHandler: Handler<S>,
+      parentHandler: Handler<JoinState>,
       disposables: IDisposable[]
     ) => void | IDisposable
-    initState?: StateWithId<S>
+    initState?: StateWithId<JoinState>
   }
 
   /**
@@ -369,13 +370,13 @@ export namespace Task {
    * @param options.initState the new joint task init state
    * @returns
    */
-  export function join<Result, State, S = {}>(
-    tasks: readonly Task<Result, State>[],
-    options: JoinOptions<Result, State, S> = {}
+  export function join<Result, ChildState, JoinState = {}>(
+    tasks: readonly Task<Result, ChildState>[],
+    options: JoinOptions<Result, ChildState, JoinState> = {}
   ) {
     const taskList = tasks.slice()
     taskList.forEach(t => isInStatus(t.status, Status.pending, Status.running) && t.abort())
-    const { maxParallel = 1, dispatcher, onTaskStarted, initState = {} as StateWithId<S> } = options
+    const { maxParallel = 1, dispatcher, onTaskStarted, initState = {} as StateWithId<JoinState> } = options
 
     return Task.create(
       h => {
@@ -395,6 +396,7 @@ export namespace Task {
             if (t.started && onTaskStarted) {
               const d = onTaskStarted(t, index, h, disposables)
               if (d && isDisposable(d)) {
+                markTracked(d)
                 disposables.push(d)
               }
             }
@@ -407,9 +409,7 @@ export namespace Task {
     )
   }
 
-  class InternalTask<Result = any, State = any, Err = unknown>
-    extends Disposable
-    implements Task<Result, State, Err>, Dispatcher.ITask<Result, Err> {
+  class InternalTask<Result, State> extends Disposable implements Task<Result, State>, Dispatcher.ITask<Result> {
     private readonly _runnable: Runnable<Result, State>
 
     private _status: Status = Status.init
@@ -472,7 +472,7 @@ export namespace Task {
 
     private _done = false
     private _result?: Result
-    private _error?: any
+    private _error?: unknown
     private _restart = 0
 
     public name: string
@@ -612,8 +612,7 @@ export namespace Task {
         return
       }
       if (error instanceof Error) {
-        let stack = error.stack || ''
-        stack += '\n' + this.stack
+        const stack = error.stack ? `${error.stack}\n${this.stack}` : this.stack
         error.stack = stack
       }
       this._error = error
