@@ -104,6 +104,41 @@ Retry utility is used in any cases which need a retry strategy and cancellation 
 
 # Kvo
 
-Kvo utility is used to observe any properties's change `Event` in a `Disposable` instance, see kvo test cases for more information
+Kvo utility is used to observe the object key change, and produce an `Event`, see kvo test cases for more information
 
 ## Kvo API
+
+```typescript
+
+const a = {
+  foo: 0,
+  bar: 'init',
+}
+
+// transform any object into an `Observable` instance, which is a `Disposable`
+const observable = Kvo.from(a)
+
+// produce an `Event<Kvo.ChangeEvent<number>>`
+const onFooChange = observable.observe('foo')
+
+onFooChange(evt => console.log(evt))
+
+/** should print out { current: 1, prev: 0, ... } */
+a.foo = 1
+
+// disconnect any observed events from this observable
+observable.dispose()
+
+/** no prints any more */
+a.foo = 2
+
+class B {
+ private foo: 'bar'
+}
+
+const b = new B()
+
+// able to observe private properties, produce Event<Kvo.ChangeEvent<string>>
+const onFooChange2 = Kvo.from(b).observe('foo')
+
+```
