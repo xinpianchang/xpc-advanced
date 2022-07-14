@@ -33,7 +33,7 @@ const shallowCompare = <T extends Record<string, any>>(prev: T, current: T) => {
 
 let _taskId = 1
 
-export interface Task<Result = any, State = {}> extends IDisposable {
+export interface Task<Result = any, State = any> extends IDisposable {
   readonly onRestart: Event<void>
   readonly onStart: Event<void>
   readonly onPending: Event<void>
@@ -47,7 +47,7 @@ export interface Task<Result = any, State = {}> extends IDisposable {
   readonly state: Readonly<State>
   readonly status: Task.Status
   readonly result?: Result
-  readonly error?: unknown
+  readonly error?: any
   readonly pending: boolean
   readonly running: boolean
   readonly aborted: boolean
@@ -60,8 +60,15 @@ export interface Task<Result = any, State = {}> extends IDisposable {
   setState(state: Readonly<State>): void
   resetState(): void
   destroy(): void
-  asPromise(): CancelablePromise<Result>
-  toRunnable(): (token: CancellationToken) => Promise<Result>
+  asPromise(autostart?: boolean): CancelablePromise<Result>
+  /**
+   * generate a runnable which take a cancellation token as argument,
+   * and return a promise waiting for the next result after being started
+   * @param autostart whether to start the task automatically when the runnable
+   * is executed
+   * @returns Retry Runnable
+   */
+  toRunnable(autostart?: boolean): (token: CancellationToken) => Promise<Result>
   clone(taskId?: string): Task<Result, State>
   dispatcher: Task.Dispatcher
   name: string
@@ -718,12 +725,15 @@ export namespace Task {
       }
     }
 
-    public asPromise() {
-      return createCancelablePromise(this.toRunnable())
+    public asPromise(autostart = false) {
+      return createCancelablePromise(this.toRunnable(autostart))
     }
 
-    public toRunnable() {
+    public toRunnable(autostart = false) {
       return (token: CancellationToken) => {
+        if (autostart && !this.started) {
+          this.start()
+        }
         const disposables: IDisposable[] = []
         return new Promise<Result>((resolve, reject) => {
           if (this._disposed) {

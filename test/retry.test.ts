@@ -1,5 +1,5 @@
 import { CancellationTokenSource, createCancelablePromise, timeout } from '@newstudios/common'
-import { Retry } from '..'
+import { Retry, Task } from '..'
 
 function createTask<T>(processTime: number, errCount: number, target: T) {
   let c = 0
@@ -48,7 +48,7 @@ describe('Retry module cases', () => {
     return expect(Retry.run(task)).resolves.toBe('ok')
   })
 
-  test('run async for 4 times', () => {
+  test('run async for 4 times with default strategy', () => {
     expect.assertions(1)
     const task = createTask(500, 4, 'ok')
     return expect(Retry.run(task)).rejects.toThrow('fail')
@@ -102,5 +102,22 @@ describe('Retry module cases', () => {
     setTimeout(() => controller.abort(), 1000)
     const p = Retry.factory(controller.signal).run(task)
     return expect(p).rejects.toThrow('Canceled')
+  })
+
+  test('task with retry', async () => {
+    const fn = jest.fn()
+    const task = Task.create(async h => {
+      fn()
+      await timeout(10)
+      if (h.restart === 2) {
+        return 'ok'
+      }
+      throw new Error('fail')
+    })
+
+    const retry = Retry.run(task)
+
+    await retry
+    expect(fn).toBeCalledTimes(3)
   })
 })

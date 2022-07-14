@@ -1,17 +1,11 @@
-import {
-  asPromise,
-  CancelablePromise,
-  canceled,
-  CancellationToken,
-  createCancelablePromise,
-  timeout,
-} from '@newstudios/common'
+import { asPromise, canceled, CancellationToken, createCancelablePromise, timeout } from '@newstudios/common'
 import {
   abortSignalToCancellationToken,
   isAbortError,
   isCanceledError,
   normalizeCancelablePromiseWithToken,
 } from './utils'
+import type { Task } from './task'
 
 export namespace Retry {
   /**
@@ -54,10 +48,11 @@ export namespace Retry {
   }
 
   export type Runnable = (token: CancellationToken) => any
-  export type PromiseReturnType<T extends Function> = T extends (...args: any[]) => infer R
-    ? R extends Promise<infer RR>
-      ? RR
-      : R
+  export type PromiseReturnType<T extends Function> = T extends (...args: any[]) => infer R ? Awaited<R> : never
+  export type TaskType<T extends Function | Task<unknown, unknown>> = T extends (...args: any[]) => infer R
+    ? Awaited<R>
+    : T extends Task<infer R, unknown>
+    ? R
     : never
 
   export namespace Strategy {
@@ -138,12 +133,16 @@ export namespace Retry {
       return this
     }
 
-    protected runInternal<T extends Runnable>(fn: T, token: CancellationToken): Promise<PromiseReturnType<T>> {
+    protected runInternal<T extends Runnable | Task>(fnOrTask: T, token: CancellationToken): Promise<TaskType<T>> {
       // get retry callback
       const callback = typeof this.s === 'object' ? Strategy.from(this.s) : this.s
+
+      const fn: (token: CancellationToken) => any =
+        typeof fnOrTask === 'function' ? fnOrTask : fnOrTask.toRunnable(true)
+
       const task = () => normalizeCancelablePromiseWithToken(fn(token), token)
 
-      function run(count = 0): Promise<PromiseReturnType<T>> {
+      function run(count = 0): Promise<TaskType<T>> {
         if (token.isCancellationRequested) {
           return Promise.reject(canceled())
         }
@@ -181,9 +180,8 @@ export namespace Retry {
       return c
     }
 
-    public run<T extends Runnable>(fn: T): CancelablePromise<PromiseReturnType<T>> {
-      const callback = this.runInternal.bind(this, fn)
-      return createCancelablePromise(callback)
+    public run<T extends Runnable | Task>(fnOrTask: T) {
+      return createCancelablePromise(token => this.runInternal(fnOrTask, token))
     }
   }
 
@@ -214,8 +212,8 @@ export namespace Retry {
       return c
     }
 
-    public run<T extends Runnable>(fn: T): Promise<PromiseReturnType<T>> {
-      return this.runInternal(fn, this.t)
+    public run<T extends Runnable | Task>(fnOrTask: T) {
+      return this.runInternal(fnOrTask, this.t)
     }
   }
 
@@ -234,15 +232,15 @@ export namespace Retry {
     return new FactoryWithToken(token)
   }
 
-  export function run<T extends Runnable>(fn: T, strategy: Strategy | Callback = Strategy.Default) {
-    return factory().strategy(strategy).run(fn)
+  export function run<T extends Runnable | Task>(f: T, strategy: Strategy | Callback = Strategy.Default) {
+    return factory().strategy(strategy).run(f)
   }
 
-  export function runWithToken<T extends Runnable>(
-    fn: T,
+  export function runWithToken<T extends Runnable | Task>(
+    f: T,
     token: CancellationToken | AbortSignal,
     strategy: Strategy | Callback = Strategy.Default
   ) {
-    return factory(token).strategy(strategy).run(fn)
+    return factory(token).strategy(strategy).run(f)
   }
 }
