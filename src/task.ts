@@ -688,7 +688,7 @@ export namespace Task {
         return
       }
       if (this.completed) {
-        console.warn('task is completed or distroyed')
+        console.warn('task is completed or destroyed')
         return
       }
       this.dispatcher.onStop(this)
